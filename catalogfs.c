@@ -164,14 +164,6 @@ static int catalog_removexattr(const char *path, const char *name){
 
 #endif */
 
-// Clean up filesystem. Called on filesystem exit.
-static void catalog_destroy(void *dummy){
-	/* todo */
-	/* cleanup datastructures used */
-	(void)dummy;
-	return;
-}
-
 /*Check file access permissions
 This will be called for the access() system call. If the 'default_permissions' mount option is given, this method is not called.
 More ;man access*/
@@ -224,23 +216,45 @@ static int catalog_statfs(const char *path, struct statvfs *st_buf){
 	return 0;
 }
 
-char *entry[]={"d 0701 2 1001 1001 1000 1213101162 1213101161 1213113161 /\n",
+char *catalog[]={
+			"d 0701 2 1001 1001 1000 1213101162 1213101161 1213113161 /\n",
+			"d 0777 2 108 7 3000 1213103162 1213103161 1213111161 /dir1\n",
+			"d 0705 2 122 127 6000 1213106162 1213106161 1213108161 /dir2\n",
 			"f 0701 1 0 1 2000 1213102162 1213102161 1213112161 /.hidden file 1\n",
-			"d 0001 2 108 7 3000 1213103162 1213103161 1213111161 /dir1\n",
+			"c 0760 1 111 121 22222 1213112162 1213112161 1213101161 /character special file\n",
+
 			"f 0703 1 1002 1002 4000 1213104162 1213104161 1213110161 /dir1/file 1\n",
 			"f 0704 1 41 41 5000 1213105162 1213105161 1213109111 /dir1/file 2\n",
-			"d 0705 2 122 127 6000 1213106162 1213106161 1213108161 /dir2\n",
 			"f 0726 1 115 125 7000 1213107162 1213107161 1213107161 /dir1/.hidden file 2\n",
-			"f 0747 1 117 126 8000 1213108162 1213108161 1213106161 /dir2/hello 2\n",
 			"l 0710 1 119 29 9000 1213109162 1213109161 1213105161 /dir1/link file\n",
-			"s 0740 1 113 124 10000 1213110162 1213110161 1213103161 /dir2/socket file\n",
 			"p 0750 1 110 120 11111 1213111162 1213111161 1213102161 /dir1/fifo file\n",
-			"c 0760 1 111 121 22222 1213112162 1213112161 1213101161 /character special file\n"
+
+			
+			"f 0747 1 117 126 8000 1213108162 1213108161 1213106161 /dir2/hello 2\n",
+			"s 0740 1 113 124 10000 1213110162 1213110161 1213103161 /dir2/socket file\n",
+
 };
+
+//return location of 'path' in the catalog;
+static long get_file_location(const char *path){
+	int location=0;
+	char	file_path[MAXPATHLEN];
 	
+	for(location=0; location<12;location++){
+		//assuming that given directory is listed prior to its inside files/dirs.
+		sscanf(catalog[location],"%*s%*s%*s%*s%*s%*s%*s%*s%*s\13%[^\13]s\13",file_path); //\13 is in octal (Vertical Tab).	
+		if(strcmp(file_path,path)==0)
+			break;
+	}
+	if(location>=12){
+		return -ENOENT;  //todo take care of this return value in caller function.
+	}	
+	return location;
+}
+
+// given full 'path' of a file/dir  , return it's attributes in 'st_data'
 static int get_file_entry_from_catalog(const char *path,struct stat *st_data){
 	/*todo */
-	(void)path;
 	
 	char c;
 	long int mode;
@@ -276,20 +290,17 @@ static int get_file_entry_from_catalog(const char *path,struct stat *st_data){
 	
 	// stat information ,which we have to get from output of 'find' in the catalog listing.
 	// find -L /tmp/ -printf "%y %#m %n %U %G %s %A@ %T@ %C@ \11%p\11\n"
+	// ls -mlARnQu --color=no --group-directories-first  /tmp
 
 
 	//todo checks for wrong cases of output in 'entry' variable.
 	
-	int row=0;
-	for(row=0; row<12;row++){
-		//assuming that given directory is listed prior to its inside files/dirs.
-		if(strstr(entry[row],path)!=NULL)
-			break;
-	}
-	if(row>=12){
+	int location=get_file_location(path);
+	if(location==-ENOENT || location < 0){
 		return -ENOENT;  //todo take care of this return value in caller function.
 	}
-	sscanf(entry[row],"%c %lo %ld %ld %ld %lld %lld %lld %lld %[^\13]s\n",&c,&mode,&nlink,&uid,&gid,&size,&atime,&mtime,&ctime,file_path); //\13 is in octal (Vertical Tab).
+
+	sscanf(catalog[location],"%c %lo %ld %ld %ld %lld %lld %lld %lld %[^\13]s\n",&c,&mode,&nlink,&uid,&gid,&size,&atime,&mtime,&ctime,file_path); //\13 is in octal (Vertical Tab).
 	
 	//printf("c=%c mode=%lo nlink=%ld uid=%ld gid=%ld size=%lld atime=%lld mtime=%lld ctime=%lld path=abc%sabc",c,mode,nlink,uid,gid,size,atime,mtime,ctime,file_path); 
 
@@ -389,12 +400,16 @@ static int catalog_readdir(const char *path, void *buf, fuse_fill_dir_t filler,o
 	//struct dirent **direntries;
 	(void) offset;
 	(void) fi;
+	struct stat *st=NULL;
 	
-	//todo for filler returning 1 in cases of buf being full;
+	
+	//check for filler returning 1 in cases of buf being full; 
+	//filler returns 1 when all of RAM and swap memory is full. 
+	//Practically, no need to check for the return value;
+	
 	filler(buf, ".", NULL, 0);
 	filler(buf, "..", NULL, 0);
-
-	struct stat *st=NULL;
+	
 	if(strcmp(path,"/")==0){
 		
 		get_file_entry_from_catalog("/.hidden file 1",st);
@@ -445,7 +460,7 @@ static int catalog_readlink(const char *path, char *buf, size_t size){
 	/*todo
 	int res;
 	path=translate_path(path);
-        
+
 	res = readlink(path, buf, size - 1);
 	free(path);
 	if(res == -1) {
@@ -460,6 +475,13 @@ static int catalog_readlink(const char *path, char *buf, size_t size){
 	return 0;
 }
 
+// Clean up filesystem. Called on filesystem exit.
+static void catalog_destroy(void *dummy){
+	/* todo */
+	/* cleanup datastructures used */
+	(void)dummy;
+	return;
+}
 
 static struct fuse_operations catalog_operations = {
 	.getattr	= catalog_getattr,  /* implement */
