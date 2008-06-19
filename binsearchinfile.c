@@ -5,12 +5,19 @@
 #include <string.h>
 #include <limits.h>
 #include <sys/param.h>	/* for MAXPATHLEN */
+#include <sys/stat.h>
 
 #define ENTRY_SIZE 84
 /*includes a newline character at end of each line*/
 
 void showUsage(){fprintf( stderr, "Usage: binsearchinfile <sorted filename>\n" );fprintf( stderr, "Usage: Each line should be of same size in bytes. \n" );fprintf( stderr, "Usage: New line is the record separator. \n" );}
 
+struct stat_with_depth_filepath{
+	int depth;
+	char	file_path[MAXPATHLEN];
+	struct stat st_data;
+}
+		
 char *catalog[]={
 "d 0755 2 1001 1001 1000 1213101162 1213101161 1213113161 1 /\n",
 "f 0701 1 0 1 2000 1213102162 1213102161 1213112161 1 /.hidden file 1\n",
@@ -50,9 +57,56 @@ int findDepth(char *path){
 	}
 	return count; //
 }
-					   
-int getEntry(long int location,int *depth,char *file_path){
-	// Has side effects, depth and file_path will be appropriately set.
+
+// given a location of a file/dir  , return it's attributes in 'st_data'
+int getEntry_from_catalog(long int location,struct stat_with_depth_filepath *st_wdf){
+	// presumption:  location is valid.
+	
+	char c;
+	long int mode;
+	long int nlink;
+	long int uid;
+	long int gid;
+	long long int size;
+	long long int atime;
+	long long int mtime;
+	long long int ctime;
+	char	file_path[MAXPATHLEN];
+	
+//         struct stat {
+//               dev_t     st_dev;     /* ID of device containing file */
+//               ino_t     st_ino;     /* inode number */
+//               mode_t    st_mode;    /* protection :Integer type*/
+//               nlink_t   st_nlink;   /* number of hard links :Integer type*/
+//               uid_t     st_uid;     /* user ID of owner :Integer type*/
+//               gid_t     st_gid;     /* group ID of owner :Integer type*/
+//               dev_t     st_rdev;    /* device ID (if special file) */
+//               off_t     st_size;    /* total size, in bytes : Signed integer type*/   
+//              blksize_t st_blksize; /* blocksize for filesystem I/O */
+//               blkcnt_t  st_blocks;  /* number of blocks allocated */
+//               time_t    st_atime;   /* time of last access :Integer type*/
+//               time_t    st_mtime;   /* time of last modification :Integer type*/
+//               time_t    st_ctime;   /* time of last status change :Integer type*/
+//           };
+
+	// stat information ,which we have to get from output of 'find' in the catalog listing.
+	// find -L /tmp/ -printf "%y %#m %n %U %G %s %A@ %T@ %C@ \11%p\11\n"
+	// ls -mlARnQu --color=no --group-directories-first  /tmp
+
+
+/*	//todo checks for wrong cases of output in 'entry' variable.
+	
+	int location=get_file_location(path);
+	if(location==-ENOENT || location < 0){
+		return -ENOENT;  //todo take care of this return value in caller function.
+	}*/
+
+	if(st_data==NULL){
+		st_data=(struct stat*)malloc(sizeof(struct stat));
+	}
+	memset(st_data,0,sizeof(struct stat));
+	
+	
 	int fd;
 	char *catalogFile="catalog.list";
 	
@@ -64,7 +118,7 @@ int getEntry(long int location,int *depth,char *file_path){
 	fd=open("catalog.list",O_RDONLY,0);
 	if(fd==-1){
 		perror(errormsg);
-		//exit(-1);
+		exit(-1);
 	}
 	// read nbyte=85 bytes from the filedes into entry
 	
@@ -73,22 +127,136 @@ int getEntry(long int location,int *depth,char *file_path){
 	//printf("\n offset=%d\n",offset);
 	if(lseek(fd,offset,SEEK_SET)<0){
 		perror("Error in reading entry from catalog ");
+		exit(-1);
 	}
 	
 	if(read(fd,entry,ENTRY_SIZE)==-1){
 		perror("Error in reading entry from catalog ");
-		//exit(-1);
+		exit(-1);
 	}
+	
+	close(fd);
 	entry[ENTRY_SIZE]='\0';
 	//printf(":entry=%s:\n",entry);
 	//sscanf(catalog[location],"%*s%*s%*s%*s%*s%*s%*s%*s%*s%d\13%[^\13]s\13",depth,file_path);
 	sscanf(entry,"%*s%*s%*s%*s%*s%*s%*s%*s%*s%d\13%[^\13]s\13",depth,file_path);  
+	
+	sscanf(catalog[location],"%c %lo %ld %ld %ld %lld %lld %lld %lld %[^\13]s\n",&c,&mode,&nlink,&uid,&gid,&size,&atime,&mtime,&ctime,file_path); //\13 is in octal (Vertical Tab).
+	
+	//printf("c=%c mode=%lo nlink=%ld uid=%ld gid=%ld size=%lld atime=%lld mtime=%lld ctime=%lld path=abc%sabc",c,mode,nlink,uid,gid,size,atime,mtime,ctime,file_path); 
+
+/*	if(strcmp(file_path,path)!=0){
+		// both strings are not equal. The entry(in catalog) for the requested path is improper.
+		return -ENOENT; //todo take care of this return value in caller function.
+	}*/
+	
+	switch(c){
+		case 'd': mode= S_IFDIR|mode; break;
+		case 'l': mode= S_IFLNK|mode; break;
+		case 'f': mode= S_IFREG|mode; break;
+		case 'b': mode= S_IFBLK|mode; break;
+		case 'c': mode= S_IFCHR|mode; break;
+		case 'p': mode= S_IFIFO|mode; break;
+		//case 'n': mode= S_IFNWK|mode; break;
+		//case 'm': mode= S_INSHD|mode; break;
+		case 's': mode= S_IFSOCK|mode; break;
+	}
+	
+	st_data->st_mode=mode;  // %y  and %#m
+	st_data->st_nlink=nlink;  //%n
+	st_data->st_uid=uid; //%U
+	st_data->st_gid=gid; //%G
+	st_data->st_size=size; //%s
+	st_data->st_atime=atime; //%A@
+	st_data->st_mtime=mtime; //%T@
+	st_data->st_ctime=ctime; //%C@
+	
+	return 0;//todo take care of this return value in caller function.
+}
+					   
+int getEntry_depth_filepath(long int location,int *depth,char *file_path){
+	// Get Entry at (input)location(line number in catalog file).
+	// Has side effects, depth and file_path will be appropriately set. "depth, file_path" are output arguments.
+/*	int fd;
+	char *catalogFile="catalog.list";
+	
+	char errormsg[]="\nCannot open catalog file: ";
+	char entry[ENTRY_SIZE+1];
+	
+//	strcat(errormsg,catalogFile);  //stack smashing problem.
+	
+	fd=open("catalog.list",O_RDONLY,0);
+	if(fd==-1){
+		perror(errormsg);
+		exit(-1);
+	}
+	// read nbyte=85 bytes from the filedes into entry
+	
+	int offset=(ENTRY_SIZE)*location;
+	
+	//printf("\n offset=%d\n",offset);
+	if(lseek(fd,offset,SEEK_SET)<0){
+		perror("Error in reading entry from catalog ");
+		exit(-1);
+	}
+	
+	if(read(fd,entry,ENTRY_SIZE)==-1){
+		perror("Error in reading entry from catalog ");
+		exit(-1);
+	}
+	
+	close(fd);
+	entry[ENTRY_SIZE]='\0';
+	//printf(":entry=%s:\n",entry);
+	//sscanf(catalog[location],"%*s%*s%*s%*s%*s%*s%*s%*s%*s%d\13%[^\13]s\13",depth,file_path);
+	sscanf(entry,"%*s%*s%*s%*s%*s%*s%*s%*s%*s%d\13%[^\13]s\13",depth,file_path);  
+*/	
+	
+	struct stat_with_depth_filepath *st_wdf=NULL;
+	getEntry_from_catalog(location,st_wdf);
+	*depth=st_wdf->depth;
+	file_path=st_wdf->file_path;
 }
 
 int getEntry_file_path(long int location,char *file_path){
 	// Has side effects,file_path will be appropriately set.
 	int depth;
-	getEntry(location,&depth,file_path);
+	getEntry_depth_filepath(location,&depth,file_path);
+}
+
+int get_directory_contents(char *file_path,long int *low, long int *high){
+	// Gets lowest and highest locations for a directory's(file_path) immediate contents. Not recursive contents.
+	
+	//check if file_path is a directory. 
+	//File_path is a directory if ending with '/'
+	int len=strlen(file_path);
+	char entry_file_path[MAXPATHLEN];
+	int i,depth,entry_depth;
+	
+	
+	if(len<=0 || file_path[len-1]!='/'){
+		*low=*high=-1;
+		return -1; //error , not a directory.
+	}
+	
+	*low=binSearch(file_path);
+	depth=findDepth(file_path);
+	
+	i=*low;
+	do{
+		i++;
+		if(i>=14)
+			break;
+		getEntry_depth_filepath(i,&entry_depth,entry_file_path);
+// 		// Entry of Content should have same depth and entry_path should prefixed by the parent path.
+		if(entry_depth !=depth || strncmp(file_path,entry_file_path,len)!=0)
+			break;
+		
+	}while(1);
+	
+	*high = i-1;	
+	
+	return 0;
 }
 
 int find_index(int searchPath_depth,long int *low,long int *high,long int *mid,int *depth){
@@ -100,7 +268,7 @@ int find_index(int searchPath_depth,long int *low,long int *high,long int *mid,i
 		*mid=calculateMid(*low,*high);
 		printf("First loop mid=%d,low=%d,high=%d\n",*mid,*low,*high);
 		
-		getEntry(*mid,depth,file_path);
+		getEntry_depth_filepath(*mid,depth,file_path);
 		
 		if(*depth==searchPath_depth){
 			break;
@@ -124,7 +292,7 @@ int find_lowest_index(int searchPath_depth,long int *low,long int *mid,int *dept
 		low_index_with_same_depth--;	
 		if(low_index_with_same_depth<*low)
 			break;
-		getEntry(low_index_with_same_depth,depth,file_path);
+		getEntry_depth_filepath(low_index_with_same_depth,depth,file_path);
 	}
 	low_index_with_same_depth++;
 	*low=low_index_with_same_depth;
@@ -140,7 +308,7 @@ int find_highest_index(int searchPath_depth,long int *high,long int *mid,int *de
 		high_index_with_same_depth++;			
 		if(high_index_with_same_depth>*high)
 			break;
-		getEntry(high_index_with_same_depth,depth,file_path);
+		getEntry_depth_filepath(high_index_with_same_depth,depth,file_path);
 	}
 	high_index_with_same_depth--;
 	*high=high_index_with_same_depth;
@@ -211,6 +379,7 @@ int	main( int argc, char **argv ){
 	printf("c=%c mode=%lo nlink=%ld uid=%ld gid=%ld size=%lld atime=%lld mtime=%lld ctime=%lld path=abc%sabc",c,mode,nlink,uid,gid,size,atime,mtime,ctime,file_path);
 	*/
 	int i;
+	long int low,high;
 /*	for(i=0;i<14;i++){
 		printf("strlen(catalog[%d])=%d\n",i,strlen(catalog[i]));
 
@@ -234,7 +403,9 @@ int	main( int argc, char **argv ){
 		sscanf(catalog[i],"%*s%*s%*s%*s%*s%*s%*s%*s%*s%*d\13%[^\13]s\13",file_path); //\13 is in octal (Vertical Tab).
 		//printf("\n%s",file_path);
 		printf("%d\n",i);
-		printf("position of %s=%d\n",file_path,binSearch(file_path));
+		//printf("position of %s=%d\n",file_path,binSearch(file_path));
+		get_directory_contents(file_path,&low,&high);
+		printf("directory contents indices for i=%d, low=%d, high=%d\n",i,low,high);
 	}
 	
 	
