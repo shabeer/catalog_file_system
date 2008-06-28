@@ -12,13 +12,11 @@
 
 void showUsage(){fprintf( stderr, "Usage: binsearchinfile <sorted filename>\n" );fprintf( stderr, "Usage: Each line should be of same size in bytes. \n" );fprintf( stderr, "Usage: New line is the record separator. \n" );}
 
-struct stat_with_depth_filepath{
+typedef struct stat_with_depth_filepath{
 	int depth;
-	char	file_path[MAXPATHLEN];
+	char	*file_path;
 	struct stat st_data;
-}
-		
-char *catalog[]={
+}stat_wdf;char *catalog[]={
 "d 0755 2 1001 1001 1000 1213101162 1213101161 1213113161 1 /\n",
 "f 0701 1 0 1 2000 1213102162 1213102161 1213112161 1 /.hidden file 1\n",
 "c 0760 1 111 121 22222 1213112162 1213112161 1213101161 1 /character special file\n",
@@ -59,7 +57,7 @@ int findDepth(char *path){
 }
 
 // given a location of a file/dir  , return it's attributes in 'st_data'
-int getEntry_from_catalog(long int location,struct stat_with_depth_filepath *st_wdf){
+int getEntry_from_catalog(long int location,stat_wdf *st_wdf){
 	// presumption:  location is valid.
 	
 	char c;
@@ -71,6 +69,7 @@ int getEntry_from_catalog(long int location,struct stat_with_depth_filepath *st_
 	long long int atime;
 	long long int mtime;
 	long long int ctime;
+	int depth;
 	char	file_path[MAXPATHLEN];
 	
 //         struct stat {
@@ -101,12 +100,6 @@ int getEntry_from_catalog(long int location,struct stat_with_depth_filepath *st_
 		return -ENOENT;  //todo take care of this return value in caller function.
 	}*/
 
-	if(st_data==NULL){
-		st_data=(struct stat*)malloc(sizeof(struct stat));
-	}
-	memset(st_data,0,sizeof(struct stat));
-	
-	
 	int fd;
 	char *catalogFile="catalog.list";
 	
@@ -124,7 +117,7 @@ int getEntry_from_catalog(long int location,struct stat_with_depth_filepath *st_
 	
 	int offset=(ENTRY_SIZE)*location;
 	
-	//printf("\n offset=%d\n",offset);
+	//printf(" offset=%d\n",offset);
 	if(lseek(fd,offset,SEEK_SET)<0){
 		perror("Error in reading entry from catalog ");
 		exit(-1);
@@ -139,11 +132,11 @@ int getEntry_from_catalog(long int location,struct stat_with_depth_filepath *st_
 	entry[ENTRY_SIZE]='\0';
 	//printf(":entry=%s:\n",entry);
 	//sscanf(catalog[location],"%*s%*s%*s%*s%*s%*s%*s%*s%*s%d\13%[^\13]s\13",depth,file_path);
-	sscanf(entry,"%*s%*s%*s%*s%*s%*s%*s%*s%*s%d\13%[^\13]s\13",depth,file_path);  
+	//sscanf(entry,"%*s%*s%*s%*s%*s%*s%*s%*s%*s%d\13%[^\13]s\13",depth,file_path);  
 	
-	sscanf(catalog[location],"%c %lo %ld %ld %ld %lld %lld %lld %lld %[^\13]s\n",&c,&mode,&nlink,&uid,&gid,&size,&atime,&mtime,&ctime,file_path); //\13 is in octal (Vertical Tab).
+	sscanf(entry,"%c %lo %ld %ld %ld %lld %lld %lld %lld %d \13%[^\13]s\13\n",&c,&mode,&nlink,&uid,&gid,&size,&atime,&mtime,&ctime,&depth,file_path); //\13 is in octal (Vertical Tab).
 	
-	//printf("c=%c mode=%lo nlink=%ld uid=%ld gid=%ld size=%lld atime=%lld mtime=%lld ctime=%lld path=abc%sabc",c,mode,nlink,uid,gid,size,atime,mtime,ctime,file_path); 
+	//printf("c=%c mode=%lo nlink=%ld uid=%ld gid=%ld size=%lld atime=%lld mtime=%lld ctime=%lld depth=%d  path=abc%sabc\n",c,mode,nlink,uid,gid,size,atime,mtime,ctime,depth,file_path); 
 
 /*	if(strcmp(file_path,path)!=0){
 		// both strings are not equal. The entry(in catalog) for the requested path is improper.
@@ -162,21 +155,27 @@ int getEntry_from_catalog(long int location,struct stat_with_depth_filepath *st_
 		case 's': mode= S_IFSOCK|mode; break;
 	}
 	
-	st_data->st_mode=mode;  // %y  and %#m
-	st_data->st_nlink=nlink;  //%n
-	st_data->st_uid=uid; //%U
-	st_data->st_gid=gid; //%G
-	st_data->st_size=size; //%s
-	st_data->st_atime=atime; //%A@
-	st_data->st_mtime=mtime; //%T@
-	st_data->st_ctime=ctime; //%C@
+	st_wdf->st_data.st_mode=mode;  // %y  and %#m
+	st_wdf->st_data.st_nlink=nlink;  //%n
+	st_wdf->st_data.st_uid=uid; //%U
+	st_wdf->st_data.st_gid=gid; //%G
+	st_wdf->st_data.st_size=size; //%s
+	st_wdf->st_data.st_atime=atime; //%A@
+	st_wdf->st_data.st_mtime=mtime; //%T@
+	st_wdf->st_data.st_ctime=ctime; //%C@
 	
+	st_wdf->depth=depth;
+	//printf("%d\n",st_wdf->depth);
+	st_wdf->file_path=file_path;
+	//printf("%s\n",st_wdf->file_path);
+				
 	return 0;//todo take care of this return value in caller function.
 }
 					   
+// Get Entry at (input)location(line number in catalog file).
+// Has side effects, depth and file_path will be appropriately set. "depth, file_path" are output arguments.
 int getEntry_depth_filepath(long int location,int *depth,char *file_path){
-	// Get Entry at (input)location(line number in catalog file).
-	// Has side effects, depth and file_path will be appropriately set. "depth, file_path" are output arguments.
+
 /*	int fd;
 	char *catalogFile="catalog.list";
 	
@@ -194,7 +193,7 @@ int getEntry_depth_filepath(long int location,int *depth,char *file_path){
 	
 	int offset=(ENTRY_SIZE)*location;
 	
-	//printf("\n offset=%d\n",offset);
+	//printf(" offset=%d\n",offset);
 	if(lseek(fd,offset,SEEK_SET)<0){
 		perror("Error in reading entry from catalog ");
 		exit(-1);
@@ -212,16 +211,30 @@ int getEntry_depth_filepath(long int location,int *depth,char *file_path){
 	sscanf(entry,"%*s%*s%*s%*s%*s%*s%*s%*s%*s%d\13%[^\13]s\13",depth,file_path);  
 */	
 	
-	struct stat_with_depth_filepath *st_wdf=NULL;
+	stat_wdf *st_wdf=NULL;
+	
+	if(st_wdf==NULL){
+		st_wdf=(stat_wdf*)malloc(sizeof(stat_wdf));
+		//printf("address of st_wdf %u\n",st_wdf);
+	}
+	memset(st_wdf,0,sizeof(stat_wdf));
+	
 	getEntry_from_catalog(location,st_wdf);
+	//printf("addr of st_wdf %u\n",st_wdf);
+	//printf("in after1 getEntry_depth_filepath=%u\n",&(st_wdf->depth));
 	*depth=st_wdf->depth;
-	file_path=st_wdf->file_path;
+	//printf("in after2 getEntry_depth_filepath\n");
+	strcpy(file_path,st_wdf->file_path);
+	//printf("in after3 getEntry_depth_filepath %d,%s\n",location,file_path);
+
 }
 
+// Has side effects,file_path will be appropriately set.
 int getEntry_file_path(long int location,char *file_path){
-	// Has side effects,file_path will be appropriately set.
 	int depth;
 	getEntry_depth_filepath(location,&depth,file_path);
+	//printf("in getEntry_file_path %d,%s\n",location,file_path);
+
 }
 
 int get_directory_contents(char *file_path,long int *low, long int *high){
@@ -233,13 +246,14 @@ int get_directory_contents(char *file_path,long int *low, long int *high){
 	char entry_file_path[MAXPATHLEN];
 	int i,depth,entry_depth;
 	
-	
+	printf(" len of %s = %d\n",file_path,len);
 	if(len<=0 || file_path[len-1]!='/'){
 		*low=*high=-1;
 		return -1; //error , not a directory.
 	}
 	
 	*low=binSearch(file_path);
+	printf("low=%d\n",*low);
 	depth=findDepth(file_path);
 	
 	i=*low;
@@ -259,9 +273,9 @@ int get_directory_contents(char *file_path,long int *low, long int *high){
 	return 0;
 }
 
+//finds an entry which has same depth as search_path.
+// Has side effects, low,high,mid,depth are modified in this function.
 int find_index(int searchPath_depth,long int *low,long int *high,long int *mid,int *depth){
-	//finds an entry which has same depth as search_path.
-	// Has side effects, low,high,mid,depth are modified in this function.
 	
 	char file_path[MAXPATHLEN];
 	while(*low<=*high){ //binary search
@@ -347,6 +361,7 @@ int binSearch(char *searchPath){
 			getEntry_file_path(mid,file_path);
 		
 			comp_result=strcmp(file_path,searchPath);
+			printf("file_path=%s, searchPath=%s,comp_result=%d\n",file_path,searchPath,comp_result);
 			no_of_comp++;
 			if(comp_result==0){
 			//found match:  searchPath is a equal to catalog[mid].
@@ -398,14 +413,14 @@ int	main( int argc, char **argv ){
 		fputs(catalog[i],fp);
 	}*/
 	
-	//printf("\n comparison=%d",strcmp("/dir1/link file","/dir2"));
+	//printf(" comparison=%d\n",strcmp("/dir1/link file","/dir2"));
 	for(i=0;i<14;i++){
 		sscanf(catalog[i],"%*s%*s%*s%*s%*s%*s%*s%*s%*s%*d\13%[^\13]s\13",file_path); //\13 is in octal (Vertical Tab).
-		//printf("\n%s",file_path);
+		//printf("%s",file_path);
 		printf("%d\n",i);
 		//printf("position of %s=%d\n",file_path,binSearch(file_path));
 		get_directory_contents(file_path,&low,&high);
-		printf("directory contents indices for i=%d, low=%d, high=%d\n",i,low,high);
+		printf("directory contents indices for i=%d, file_path=%s, low=%d, high=%d\n",i,file_path,low,high);
 	}
 	
 	
