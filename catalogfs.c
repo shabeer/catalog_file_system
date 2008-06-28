@@ -32,16 +32,10 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/param.h>	/* for MAXPATHLEN */
-#include <sys/stat.h>
-#include <limits.h>
-#include <fcntl.h>
-#include <sys/types.h>
 #include <unistd.h>
-#include <libgen.h>
 
-
-#define ENTRY_SIZE 84
-#define CATALOG_LEN 14
+static int entry_size=84;
+static int catalog_len=15;
 /*----------------------------------------------------------------------------------------*/
 static int catalog_mknod(const char *path, mode_t mode, dev_t rdev){
 	(void)path;
@@ -287,19 +281,19 @@ static int getEntry_from_catalog(long int location,stat_wdf *st_wdf){
 	char	file_path[MAXPATHLEN];
 	
 //         struct stat {
-	//               dev_t     st_dev;     /* ID of device containing file */
-	//               ino_t     st_ino;     /* inode number */
-	//               mode_t    st_mode;    /* protection :Integer type*/
-	//               nlink_t   st_nlink;   /* number of hard links :Integer type*/
-	//               uid_t     st_uid;     /* user ID of owner :Integer type*/
-	//               gid_t     st_gid;     /* group ID of owner :Integer type*/
-	//               dev_t     st_rdev;    /* device ID (if special file) */
-	//               off_t     st_size;    /* total size, in bytes : Signed integer type*/   
-	//              blksize_t st_blksize; /* blocksize for filesystem I/O */
-	//               blkcnt_t  st_blocks;  /* number of blocks allocated */
-	//               time_t    st_atime;   /* time of last access :Integer type*/
-	//               time_t    st_mtime;   /* time of last modification :Integer type*/
-	//               time_t    st_ctime;   /* time of last status change :Integer type*/
+//               dev_t     st_dev;     // ID of device containing file 
+//               ino_t     st_ino;     // inode number 
+//               mode_t    st_mode;    // protection :Integer type
+//               nlink_t   st_nlink;   // number of hard links :Integer type
+//               uid_t     st_uid;     // user ID of owner :Integer type
+//               gid_t     st_gid;     / group ID of owner :Integer type
+//               dev_t     st_rdev;    // device ID (if special file) 
+//               off_t     st_size;    // total size, in bytes : Signed integer type
+//              blksize_t st_blksize; // blocksize for filesystem I/O 
+//               blkcnt_t  st_blocks;  // number of blocks allocated 
+//               time_t    st_atime;   // time of last access :Integer type
+//               time_t    st_mtime;   // time of last modification :Integer type
+//               time_t    st_ctime;   // time of last status change :Integer type
 //           };
 
 	// stat information ,which we have to get from output of 'find' in the catalog listing.
@@ -307,18 +301,18 @@ static int getEntry_from_catalog(long int location,stat_wdf *st_wdf){
 	// ls -mlARnQu --color=no --group-directories-first  /tmp
 
 
-/*	//todo checks for wrong cases of output in 'entry' variable.
+/*	//toodo checks for wrong cases of output in 'entry' variable.
 	
 	int location=get_file_location(path);
 	if(location==-ENOENT || location < 0){
-	return -ENOENT;  //todo take care of this return value in caller function.
+	return -ENOENT;  //toodo take care of this return value in caller function.
 }*/
 
 	int fd;
 	char *catalogFile="catalog.list";
 	
 	char errormsg[]="\nCannot open catalog file: ";
-	char entry[ENTRY_SIZE+1];
+	char entry[entry_size+1];
 	
 //	strcat(errormsg,catalogFile);  //stack smashing problem.
 	
@@ -330,7 +324,7 @@ static int getEntry_from_catalog(long int location,stat_wdf *st_wdf){
 	}
 	// read nbyte=85 bytes from the filedes into entry
 	
-	int offset=(ENTRY_SIZE)*location;
+	int offset=(entry_size)*location;
 	
 	//printf(" offset=%d\n",offset);
 	if(lseek(fd,offset,SEEK_SET)<0){
@@ -338,24 +332,25 @@ static int getEntry_from_catalog(long int location,stat_wdf *st_wdf){
 		return -1;
 	}
 	
-	if(read(fd,entry,ENTRY_SIZE)==-1){
+	if(read(fd,entry,entry_size)==-1){
 		perror("Error in reading entry from catalog ");
 		return -1;
 	}
 	
 	close(fd);
-	entry[ENTRY_SIZE]='\0';
+	entry[entry_size]='\0';
 	//printf(":entry=%s:\n",entry);
 	//sscanf(catalog[location],"%*s%*s%*s%*s%*s%*s%*s%*s%*s%d\13%[^\13]s\13",depth,file_path);
 	//sscanf(entry,"%*s%*s%*s%*s%*s%*s%*s%*s%*s%d\13%[^\13]s\13",depth,file_path);  
 	
-	sscanf(entry,"%c %lo %ld %ld %ld %lld %lld %lld %lld %d \13%[^\13]s\13\n",&c,&mode,&nlink,&uid,&gid,&size,&atime,&mtime,&ctime,&depth,file_path); //\13 is in octal (Vertical Tab).
+	sscanf(entry,"%c %lo %ld %ld %ld %lld %lld %lld %lld %d \1%[^\1]s\1\n",&c,&mode,&nlink,&uid,&gid,&size,&atime,&mtime,&ctime,&depth,file_path); //\1 is used as separator.
+	//\13 is in octal (Vertical Tab).
 	
 	//printf("c=%c mode=%lo nlink=%ld uid=%ld gid=%ld size=%lld atime=%lld mtime=%lld ctime=%lld depth=%d  path=abc%sabc\n",c,mode,nlink,uid,gid,size,atime,mtime,ctime,depth,file_path); 
 
 /*	if(strcmp(file_path,path)!=0){
 		// both strings are not equal. The entry(in catalog) for the requested path is improper.
-	return -ENOENT; //todo take care of this return value in caller function.
+	return -ENOENT; //toodo take care of this return value in caller function.
 }*/
 	
 	switch(c){
@@ -395,7 +390,7 @@ static int getEntry_depth_filepath(long int location,int *depth,char *file_path)
 	char *catalogFile="catalog.list";
 	
 	char errormsg[]="\nCannot open catalog file: ";
-	char entry[ENTRY_SIZE+1];
+	char entry[entry_size+1];
 	
 //	strcat(errormsg,catalogFile);  //stack smashing problem.
 	
@@ -406,7 +401,7 @@ static int getEntry_depth_filepath(long int location,int *depth,char *file_path)
 }
 	// read nbyte=85 bytes from the filedes into entry
 	
-	int offset=(ENTRY_SIZE)*location;
+	int offset=(entry_size)*location;
 	
 	//printf(" offset=%d\n",offset);
 	if(lseek(fd,offset,SEEK_SET)<0){
@@ -414,13 +409,13 @@ static int getEntry_depth_filepath(long int location,int *depth,char *file_path)
 	exit(-1);
 }
 	
-	if(read(fd,entry,ENTRY_SIZE)==-1){
+	if(read(fd,entry,entry_size)==-1){
 	perror("Error in reading entry from catalog ");
 	exit(-1);
 }
 	
 	close(fd);
-	entry[ENTRY_SIZE]='\0';
+	entry[entry_size]='\0';
 	//printf(":entry=%s:\n",entry);
 	//sscanf(catalog[location],"%*s%*s%*s%*s%*s%*s%*s%*s%*s%d\13%[^\13]s\13",depth,file_path);
 	sscanf(entry,"%*s%*s%*s%*s%*s%*s%*s%*s%*s%d\13%[^\13]s\13",depth,file_path);  
@@ -521,7 +516,7 @@ static int find_highest_index(int searchPath_depth,long int *high,long int *mid,
 
 //return's location of the 'searchPath' input
 static int binSearch(char *searchPath){
-	long int low=0,high=CATALOG_LEN-1,mid;
+	long int low=0,high=catalog_len-1,mid;
 	char file_path[MAXPATHLEN];
 	int comp_result=0,no_of_comp=0;
 	int depth=1,result=-1;
@@ -600,23 +595,23 @@ static int get_directory_contents(char *file_path,long int *low, long int *high)
 	
 	*low=binSearch(file_path);
 	if(*low<0){
-		return -1;
+		return -ENOENT;
 	}
 		
 	//printf("low=%ld\n",*low);
 	depth=findDepth(file_path);
 	
 	if(depth<=0)
-		return -1;
+		return -ENOENT;
 	
 	i=*low;
 	do{
 		i++;
-		if(i>=14)
+		if(i>=catalog_len)
 			break;
 		ret_val=getEntry_depth_filepath(i,&entry_depth,entry_file_path);
 		if(ret_val<0)
-			return -1;
+			return -ENOENT;
 // 		// Entry of Content should have same depth and entry_path should prefixed by the parent path.
 		if(entry_depth !=depth || strncmp(file_path,entry_file_path,len)!=0)
 			break;
@@ -640,7 +635,7 @@ static int get_directory_contents(char *file_path,long int *low, long int *high)
 			break;
 	}
 	if(location>=12){
-		return -ENOENT;  //todo take care of this return value in caller function.
+		return -ENOENT;  //toodo take care of this return value in caller function.
 	}	
 	return location;
 }*/
@@ -652,7 +647,7 @@ static int getattr_by_location(long int location,struct stat *st_data){
 	stat_wdf st_wdf;
 	ret_val=getEntry_from_catalog(location,&st_wdf);
 	if(ret_val<0)
-		return -1;
+		return -ENOENT;
 	
 	//put st_wdf.st_data in *st_data;
 	
@@ -676,11 +671,11 @@ static int getattr_by_path(const char *path,struct stat *st_data){
 	//determine location of 'path'
 	location=binSearch((char *)path);
 	if(location<0)
-		return -1;
+		return -ENOENT;
 	
 	ret_val=getattr_by_location(location,st_data);
 	if(ret_val<0)
-		return -1;
+		return -ENOENT;
 	
 	return 0;
 }
@@ -707,7 +702,6 @@ static int catalog_getattr(const char *path, struct stat *st_data){
 
 /*
 static int get_file_entry_from_catalog(const char *path,struct stat *st_data){
-	//todo 
 	
 	char c;
 	long int mode;
@@ -746,11 +740,11 @@ static int get_file_entry_from_catalog(const char *path,struct stat *st_data){
 	// ls -mlARnQu --color=no --group-directories-first  /tmp
 
 
-	//todo checks for wrong cases of output in 'entry' variable.
+	//toodo checks for wrong cases of output in 'entry' variable.
 	
 	int location=get_file_location(path);
 	if(location==-ENOENT || location < 0){
-		return -ENOENT;  //todo take care of this return value in caller function.
+		return -ENOENT;  //toodo take care of this return value in caller function.
 	}
 
 	sscanf(catalog[location],"%c %lo %ld %ld %ld %lld %lld %lld %lld %[^\13]s\n",&c,&mode,&nlink,&uid,&gid,&size,&atime,&mtime,&ctime,file_path); //\13 is in octal (Vertical Tab).
@@ -759,7 +753,7 @@ static int get_file_entry_from_catalog(const char *path,struct stat *st_data){
 
 	if(strcmp(file_path,path)!=0){
 		// both strings are not equal. The entry(in catalog) for the requested path is improper.
-		return -ENOENT; //todo take care of this return value in caller function.
+		return -ENOENT; //toodo take care of this return value in caller function.
 	}
 	
 	switch(c){
@@ -783,12 +777,12 @@ static int get_file_entry_from_catalog(const char *path,struct stat *st_data){
 	st_data->st_mtime=mtime; //%T@
 	st_data->st_ctime=ctime; //%C@
 	
-	return 0;//todo take care of this return value in caller function.
+	return 0;//toodo take care of this return value in caller function.
 }
 */
 
 static int catalog_readdir(const char *path, void *buf, fuse_fill_dir_t filler,off_t offset, struct fuse_file_info *fi){
-	/*todo
+	/*toodo
 	DIR *dp;
 	struct dirent *de;
 	int res;
@@ -841,7 +835,7 @@ static int catalog_readdir(const char *path, void *buf, fuse_fill_dir_t filler,o
 	ret_val=get_directory_contents((char*)path,&low_index,&high_index);
 	
 	if(ret_val<0 || low_index<0 || high_index<0){
-		printf("Error: Did not enter for loop\n");
+		//printf("Error: Did not enter for loop\n");
 		return -ENOENT;
 	}
 			
@@ -851,15 +845,15 @@ static int catalog_readdir(const char *path, void *buf, fuse_fill_dir_t filler,o
 		char pathname[MAXPATHLEN];
 		memset(&st, 0, sizeof(st));
 		
-		printf("Entered for loop\n");
+		//printf("Entered for loop\n");
 		ret_val=getattr_by_location(location,&st);
 		ret_val2=getEntry_file_path(location,pathname);
 		
-		printf("path=%s, size=%d\n",pathname,(int)st.st_size);
+		//printf("path=%s, size=%d\n",pathname,(int)st.st_size);
 		
 			
 		if(ret_val>=0 && ret_val2>=0){
-			printf("Enter if stmt: pathname=%s\n",pathname);
+			//printf("Enter if stmt: pathname=%s\n",pathname);
 			if (filler(buf, basename(pathname), &st, 0))
 				break;
 		}
@@ -925,8 +919,7 @@ static int catalog_readdir(const char *path, void *buf, fuse_fill_dir_t filler,o
 
 
 static int catalog_readlink(const char *path, char *buf, size_t size){
-	/*todo
-	int res;
+	/*int res;
 	path=translate_path(path);
 
 	res = readlink(path, buf, size - 1);
@@ -940,21 +933,28 @@ static int catalog_readlink(const char *path, char *buf, size_t size){
 	(void)path;
 	(void)buf;
 	(void)size;
+	
+	//todo
+	//printf("size=%d\n",size);
+	strcpy(buf,"../.dir2");
+	
+	
+	//return -ENOENT;
 	return 0;
 }
 
 // Clean up filesystem. Called on filesystem exit.
 static void catalog_destroy(void *dummy){
-	/* todo */
-	/* cleanup datastructures used */
+	// todo 
+	// cleanup datastructures used 
 	(void)dummy;
 	return;
 }
 
 static struct fuse_operations catalog_operations = {
-	.getattr	= catalog_getattr,  /* implement */
+	.getattr	= catalog_getattr,  /* implemented */
 	.access	= catalog_access,	/* implemented */
-	.destroy	= catalog_destroy,	/* implement */
+	.destroy	= catalog_destroy,	/* implemented */
 
 	.open	= catalog_open,
 	.read	= catalog_read,
@@ -966,13 +966,13 @@ static struct fuse_operations catalog_operations = {
 	.fsync	= catalog_fsync,
 	.fsyncdir	= catalog_fsyncdir,
 
-	.opendir	= catalog_opendir, /* implement */
-	.readdir	= catalog_readdir, /* implement */
+	.opendir	= catalog_opendir, /* implemented */
+	.readdir	= catalog_readdir, /* implemented */
 	.mkdir	= catalog_mkdir,
 	.rmdir	= catalog_rmdir,
 
 	.link	= catalog_link,
-	.readlink	= catalog_readlink, /* implement */
+	.readlink	= catalog_readlink, /* implemented */
 	.symlink	= catalog_symlink,
 	.unlink	= catalog_unlink,
 
