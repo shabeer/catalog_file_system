@@ -8,9 +8,10 @@
 #include <sys/stat.h>
 
 #define ENTRY_SIZE 84
+#define CATALOG_LEN 14
 /*includes a newline character at end of each line*/
 
-void showUsage(){fprintf( stderr, "Usage: binsearchinfile <sorted filename>\n" );fprintf( stderr, "Usage: Each line should be of same size in bytes. \n" );fprintf( stderr, "Usage: New line is the record separator. \n" );}
+static void showUsage(){fprintf( stderr, "Usage: binsearchinfile <sorted filename>\n" );fprintf( stderr, "Usage: Each line should be of same size in bytes. \n" );fprintf( stderr, "Usage: New line is the record separator. \n" );}
 
 typedef struct stat_with_depth_filepath{
 	int depth;
@@ -33,11 +34,11 @@ typedef struct stat_with_depth_filepath{
 "s 0740 1 113 124 10000 1213110162 1213110161 1213103161 2 /dir2/semaphore file\n"
 };
 	
-long int calculateMid(long int low,long int high){
+static long int calculateMid(long int low,long int high){
 	return low+(high-low)/2;
 }
 	
-int findDepth(char *path){
+static int findDepth(char *path){
 	// returns depth of path . 
 	// depth = number of "/" in the path
 	// limitation: path should NOT contain escaped "/"
@@ -57,7 +58,7 @@ int findDepth(char *path){
 }
 
 // given a location of a file/dir  , return it's attributes in 'st_data'
-int getEntry_from_catalog(long int location,stat_wdf *st_wdf){
+static int getEntry_from_catalog(long int location,stat_wdf *st_wdf){
 	// presumption:  location is valid.
 	
 	char c;
@@ -119,13 +120,13 @@ int getEntry_from_catalog(long int location,stat_wdf *st_wdf){
 	
 	//printf(" offset=%d\n",offset);
 	if(lseek(fd,offset,SEEK_SET)<0){
-		perror("Error in reading entry from catalog ");
-		exit(-1);
+		perror("Error in reading entry(file seek) from catalog ");
+		return -1;
 	}
 	
 	if(read(fd,entry,ENTRY_SIZE)==-1){
 		perror("Error in reading entry from catalog ");
-		exit(-1);
+		return -1;
 	}
 	
 	close(fd);
@@ -169,12 +170,12 @@ int getEntry_from_catalog(long int location,stat_wdf *st_wdf){
 	st_wdf->file_path=file_path;
 	//printf("%s\n",st_wdf->file_path);
 				
-	return 0;//todo take care of this return value in caller function.
+	return 0;//take care of this return value in caller function.
 }
 					   
 // Get Entry at (input)location(line number in catalog file).
 // Has side effects, depth and file_path will be appropriately set. "depth, file_path" are output arguments.
-int getEntry_depth_filepath(long int location,int *depth,char *file_path){
+static int getEntry_depth_filepath(long int location,int *depth,char *file_path){
 
 /*	int fd;
 	char *catalogFile="catalog.list";
@@ -219,70 +220,40 @@ int getEntry_depth_filepath(long int location,int *depth,char *file_path){
 	}
 	memset(st_wdf,0,sizeof(stat_wdf));
 	
-	getEntry_from_catalog(location,st_wdf);
+	int ret_val=getEntry_from_catalog(location,st_wdf);
+	if(ret_val<0)
+		return -1;
 	//printf("addr of st_wdf %u\n",st_wdf);
 	//printf("in after1 getEntry_depth_filepath=%u\n",&(st_wdf->depth));
 	*depth=st_wdf->depth;
 	//printf("in after2 getEntry_depth_filepath\n");
 	strcpy(file_path,st_wdf->file_path);
 	//printf("in after3 getEntry_depth_filepath %d,%s\n",location,file_path);
-
+	return 0;
 }
 
 // Has side effects,file_path will be appropriately set.
-int getEntry_file_path(long int location,char *file_path){
+static int getEntry_file_path(long int location,char *file_path){
 	int depth;
-	getEntry_depth_filepath(location,&depth,file_path);
+	return getEntry_depth_filepath(location,&depth,file_path);
 	//printf("in getEntry_file_path %d,%s\n",location,file_path);
 
 }
 
-int get_directory_contents(char *file_path,long int *low, long int *high){
-	// Gets lowest and highest locations for a directory's(file_path) immediate contents. Not recursive contents.
-	
-	//check if file_path is a directory. 
-	//File_path is a directory if ending with '/'
-	int len=strlen(file_path);
-	char entry_file_path[MAXPATHLEN];
-	int i,depth,entry_depth;
-	
-	printf(" len of %s = %d\n",file_path,len);
-	if(len<=0 || file_path[len-1]!='/'){
-		*low=*high=-1;
-		return -1; //error , not a directory.
-	}
-	
-	*low=binSearch(file_path);
-	printf("low=%d\n",*low);
-	depth=findDepth(file_path);
-	
-	i=*low;
-	do{
-		i++;
-		if(i>=14)
-			break;
-		getEntry_depth_filepath(i,&entry_depth,entry_file_path);
-// 		// Entry of Content should have same depth and entry_path should prefixed by the parent path.
-		if(entry_depth !=depth || strncmp(file_path,entry_file_path,len)!=0)
-			break;
-		
-	}while(1);
-	
-	*high = i-1;	
-	
-	return 0;
-}
 
 //finds an entry which has same depth as search_path.
 // Has side effects, low,high,mid,depth are modified in this function.
-int find_index(int searchPath_depth,long int *low,long int *high,long int *mid,int *depth){
+static int find_index(int searchPath_depth,long int *low,long int *high,long int *mid,int *depth){
 	
 	char file_path[MAXPATHLEN];
+	int ret_val;
 	while(*low<=*high){ //binary search
 		*mid=calculateMid(*low,*high);
 		printf("First loop mid=%d,low=%d,high=%d\n",*mid,*low,*high);
 		
-		getEntry_depth_filepath(*mid,depth,file_path);
+		ret_val=getEntry_depth_filepath(*mid,depth,file_path);
+		if(ret_val<0)
+			return -1;
 		
 		if(*depth==searchPath_depth){
 			break;
@@ -293,54 +264,64 @@ int find_index(int searchPath_depth,long int *low,long int *high,long int *mid,i
 			*high=*mid-1;
 		}
 	}
-	return 1;
+	return 0;
 }	
 
-int find_lowest_index(int searchPath_depth,long int *low,long int *mid,int *depth){
+static int find_lowest_index(int searchPath_depth,long int *low,long int *mid,int *depth){
 	//find the lowest index of catalog , having same depth as that of searchPath.
 	
 	int low_index_with_same_depth=*mid;
 	char file_path[MAXPATHLEN];
+	int ret_val;
 	
 	while(*depth==searchPath_depth){ 
 		low_index_with_same_depth--;	
 		if(low_index_with_same_depth<*low)
 			break;
-		getEntry_depth_filepath(low_index_with_same_depth,depth,file_path);
+		ret_val=getEntry_depth_filepath(low_index_with_same_depth,depth,file_path);
+		if(ret_val<0)
+			return -1;
 	}
 	low_index_with_same_depth++;
 	*low=low_index_with_same_depth;
+	return 0;
 }
 
-int find_highest_index(int searchPath_depth,long int *high,long int *mid,int *depth){
+static int find_highest_index(int searchPath_depth,long int *high,long int *mid,int *depth){
 	//find the highest index of catalog , having same depth as that of searchPath.
 	
 	char file_path[MAXPATHLEN];
 	int high_index_with_same_depth=*mid;		
-	
+	int ret_val;
 	while(*depth==searchPath_depth){
 		high_index_with_same_depth++;			
 		if(high_index_with_same_depth>*high)
 			break;
-		getEntry_depth_filepath(high_index_with_same_depth,depth,file_path);
+		ret_val=getEntry_depth_filepath(high_index_with_same_depth,depth,file_path);
+		if(ret_val<0)
+			return -1;
 	}
 	high_index_with_same_depth--;
 	*high=high_index_with_same_depth;
+	return 0;
 }
 
-int binSearch(char *searchPath){
-	long int low=0,high=13,mid;
+//return's location of the 'searchPath' input
+static int binSearch(char *searchPath){
+	long int low=0,high=CATALOG_LEN-1,mid;
 	char file_path[MAXPATHLEN];
 	int comp_result=0,no_of_comp=0;
 	int depth=1,result=-1;
-	
+	int ret_val;
 	int searchPath_depth=findDepth(searchPath);
 	
 	if(searchPath_depth<=0)
 		return result;
 	
 	
-	find_index(searchPath_depth,&low,&high,&mid,&depth);
+	ret_val=find_index(searchPath_depth,&low,&high,&mid,&depth);
+	if(ret_val<0)
+		return -1;
 	
 	printf("Passed first loop low=%d,high=%d\n",low,high);
 	if(low>high){
@@ -348,9 +329,15 @@ int binSearch(char *searchPath){
 	}
 	else if(low<=high){ 
 		// Here pre condition is that depth = searchPath_depth. Ensured by find_index()
-		find_lowest_index(searchPath_depth,&low,&mid,&depth);
+		ret_val=find_lowest_index(searchPath_depth,&low,&mid,&depth);
+		if(ret_val<0)
+			return -1;
+		
 		depth=searchPath_depth;
-		find_highest_index(searchPath_depth,&high,&mid,&depth);
+		
+		ret_val=find_highest_index(searchPath_depth,&high,&mid,&depth);
+		if(ret_val<0)
+			return -1;
 		
 		printf("Bounds for same depth %d, low=%d,high=%d\n",searchPath_depth,low,high);
 		
@@ -358,7 +345,9 @@ int binSearch(char *searchPath){
 			mid=calculateMid(low,high);
 			printf("mid=%d,low=%d,high=%d\n",mid,low,high);
 		
-			getEntry_file_path(mid,file_path);
+			ret_val=getEntry_file_path(mid,file_path);
+			if(ret_val<0)
+				return -1;
 		
 			comp_result=strcmp(file_path,searchPath);
 			printf("file_path=%s, searchPath=%s,comp_result=%d\n",file_path,searchPath,comp_result);
@@ -378,6 +367,52 @@ int binSearch(char *searchPath){
 		
 	}
 	return result;	
+}
+	
+// Gets lowest and highest locations for a directory's(file_path) immediate contents. Not recursive contents.
+static int get_directory_contents(char *file_path,long int *low, long int *high){
+	int len=strlen(file_path);
+	char entry_file_path[MAXPATHLEN];
+	int i,depth,entry_depth;
+	int ret_val;
+	
+	printf(" len of %s = %d\n",file_path,len);
+	//check if file_path is a directory. 
+	//File_path is a directory if ending with '/'
+
+	if(len<=0 || file_path[len-1]!='/'){
+		*low=*high=-1;
+		return -1; //error , not a directory.
+	}
+	
+	*low=binSearch(file_path);
+	if(*low<0){
+		return -1;
+	}
+		
+	printf("low=%d\n",*low);
+	depth=findDepth(file_path);
+	
+	if(depth<=0)
+		return -1;
+	
+	i=*low;
+	do{
+		i++;
+		if(i>=14)
+			break;
+		ret_val=getEntry_depth_filepath(i,&entry_depth,entry_file_path);
+		if(ret_val<0)
+			return -1;
+// 		// Entry of Content should have same depth and entry_path should prefixed by the parent path.
+		if(entry_depth !=depth || strncmp(file_path,entry_file_path,len)!=0)
+			break;
+		
+	}while(1);
+	
+	*high = i-1;	
+	
+	return 0;
 }
 	
 int	main( int argc, char **argv ){
@@ -414,7 +449,7 @@ int	main( int argc, char **argv ){
 	}*/
 	
 	//printf(" comparison=%d\n",strcmp("/dir1/link file","/dir2"));
-	for(i=0;i<14;i++){
+	for(i=0;i<CATALOG_LEN;i++){
 		sscanf(catalog[i],"%*s%*s%*s%*s%*s%*s%*s%*s%*s%*d\13%[^\13]s\13",file_path); //\13 is in octal (Vertical Tab).
 		//printf("%s",file_path);
 		printf("%d\n",i);
