@@ -16,26 +16,47 @@
  * I read (and borrowed) a lot of other FUSE code to write this. 
  * Similarities possibly exist- Wholesale reuse as well of other GPL code.
  * 
- * Compile:  gcc -Wall -ansi -W -std=c99 -g -ggdb -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -I/usr/include/fuse -pthread -lfuse -lrt -ldl catalogfs.c -o catalogfs
+ * Compile:  
+ * gcc -Wall -ansi -W -std=c99 -g -ggdb -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -I/usr/include/fuse -pthread -lfuse -lrt -ldl catalogfs.c -o catalogfs
  *
- * Mount: todo: catalogfs list-of-files_ie_catalog mount_point
+ * Mount: 
+ * ./catalogfsmount catalog_file mount_point
  *
- * list-of-files_ie_catalog  file can be generated using following command
- * find /removable_storage -printf "%s %u %g %c %m '%p'\n" > list-of-files_ie_catalog
+ * Note: catalog_file should be an absolute_path. Otherwise program won't run in daemon mode.
+ * However, relative path of catalog_file works in debug mode
+ *
+ * todo: list-of-files_ie_catalog  file can be generated using following command
+ * todo: find /removable_storage -printf "%s %u %g %c %m '%p'\n" > list-of-files_ie_catalog
+ * 
+ * Limitations:
+ * 1.Extended attributes of files/directories are not stored in catalog. So they are not available in catalog_fs.
+ * 2.File name should not contain (escaped) "/" .
+ *  
  */
  
 #define FUSE_USE_VERSION 26
+#define HAVE_XATTR 1
 
 #include <fuse.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <error.h>
 #include <sys/param.h>	/* for MAXPATHLEN */
 #include <unistd.h>
 
-static int entry_size=84;
-static int catalog_len=15;
+#ifdef HAVE_XATTR
+#include <sys/xattr.h>
+#endif
+
+static int entry_size;  //=84;
+static long int catalog_len; //=15;
+
+char *catalogFile;//[MAXPATHLEN]; //="catalog.list";
+//char mount_point[MAXPATHLEN];
+//char *catalogFile="catalog.list";
+
 /*----------------------------------------------------------------------------------------*/
 static int catalog_mknod(const char *path, mode_t mode, dev_t rdev){
 	(void)path;
@@ -129,7 +150,7 @@ static int catalog_fsyncdir(const char *path, int throw, struct fuse_file_info *
 	return 0;
 }
 
-/*#ifdef HAVE_SETXATTR
+#ifdef HAVE_XATTR
 // Set the value of an extended attribute 
 static int catalog_setxattr(const char *path, const char *name, const char *value, size_t size, int flags){
 	(void)path;
@@ -137,7 +158,7 @@ static int catalog_setxattr(const char *path, const char *name, const char *valu
 	(void)value;
 	(void)size;
 	(void)flags;
-	return -EPERM;
+	return -EROFS;
 }
 
 // Get the value of an extended attribute. 
@@ -162,10 +183,10 @@ static int catalog_listxattr(const char *path, char *list, size_t size){
 static int catalog_removexattr(const char *path, const char *name){
 	(void)path;
 	(void)name;
-	return -EPERM;
+	return -EROFS;
 }
 
-#endif */
+#endif  /* HAVE_XATTR */
 
 /*Check file access permissions.This will be called for the access() system call. 
 If the 'default_permissions' mount option is given, this method is not called. More ;man access*/
@@ -234,11 +255,11 @@ static int catalog_opendir(const char *path,struct fuse_file_info *fi){
 
 /*----------------------------------------------------------------------------------------*/
 
-
 typedef struct stat_with_depth_filepath{
 	int depth;
 	char	*file_path;
 	struct stat st_data;
+	char *link_dest;
 }stat_wdf;
 
 static long int calculateMid(long int low,long int high){
@@ -264,7 +285,7 @@ static int findDepth(char *path){
 	return count; //
 }
 
-// given a location of a file/dir  , return it's attributes in 'st_data'
+// given a location of a file/dir  , return it's attributes in 'st_wdf'
 static int getEntry_from_catalog(long int location,stat_wdf *st_wdf){
 	// presumption:  location is valid.
 	
@@ -278,7 +299,7 @@ static int getEntry_from_catalog(long int location,stat_wdf *st_wdf){
 	long long int mtime;
 	long long int ctime;
 	int depth;
-	char	file_path[MAXPATHLEN];
+	char	file_path[MAXPATHLEN],link_dest[MAXPATHLEN],temp[MAXPATHLEN];
 	
 //         struct stat {
 //               dev_t     st_dev;     // ID of device containing file 
@@ -309,17 +330,19 @@ static int getEntry_from_catalog(long int location,stat_wdf *st_wdf){
 }*/
 
 	int fd;
-	char *catalogFile="catalog.list";
-	
-	char errormsg[]="\nCannot open catalog file: ";
+	char errormsg[255];
 	char entry[entry_size+1];
 	
 //	strcat(errormsg,catalogFile);  //stack smashing problem.
 	
 	//fd=open("catalog.list",O_RDONLY,0);
+	
+	sprintf(errormsg,"\nERROR:Cannot open catalog file:%s",catalogFile);
 	fd=open(catalogFile,O_RDONLY,0);
 	if(fd==-1){
-		perror(errormsg);
+		error(0,errno,errormsg);
+		//fprintf(stderr,"\nCannot open catalog file:%s:%s",catalogFile,sys_errlist[]);
+		fprintf(stderr,"ERROR:Unmount the mount point and retry by giving proper catalog file\n");
 		exit(-1);
 	}
 	// read nbyte=85 bytes from the filedes into entry
@@ -345,7 +368,7 @@ static int getEntry_from_catalog(long int location,stat_wdf *st_wdf){
 	
 	sscanf(entry,"%c %lo %ld %ld %ld %lld %lld %lld %lld %d \1%[^\1]s\1\n",&c,&mode,&nlink,&uid,&gid,&size,&atime,&mtime,&ctime,&depth,file_path); //\1 is used as separator.
 	//\13 is in octal (Vertical Tab).
-	
+
 	//printf("c=%c mode=%lo nlink=%ld uid=%ld gid=%ld size=%lld atime=%lld mtime=%lld ctime=%lld depth=%d  path=abc%sabc\n",c,mode,nlink,uid,gid,size,atime,mtime,ctime,depth,file_path); 
 
 /*	if(strcmp(file_path,path)!=0){
@@ -375,10 +398,39 @@ static int getEntry_from_catalog(long int location,stat_wdf *st_wdf){
 	st_wdf->st_data.st_ctime=ctime; //%C@
 	
 	st_wdf->depth=depth;
-	//printf("%d\n",st_wdf->depth);
 	st_wdf->file_path=file_path;
-	//printf("%s\n",st_wdf->file_path);
-				
+	
+	//printf("c=%c\n",c);
+	if(c=='l') {//if entry is a link file
+		int i;
+		for (i = 0; file_path[i] != '\2' && file_path[i] != '\0' ; i++){
+			temp[i] = file_path[i];
+		}
+		temp[i] = '\0';
+		i++;
+
+		if(strlen(file_path)!=strlen(temp)){
+			strcpy(link_dest,file_path + i );
+		}
+		strcpy(file_path,temp);
+
+		/*j = 0;
+		for (; link_dest2[i] != '\0'; i++)
+		{
+		link_dest[j++] = link_dest2[i];
+	}
+		link_dest[i] = '\0';
+		*/
+
+		st_wdf->link_dest=link_dest;
+		st_wdf->file_path=file_path;
+		//printf("depth=%d\n",st_wdf->depth);
+		//printf("file_path=%s\n",st_wdf->file_path);
+		//printf("link_dest=%s\n",st_wdf->link_dest);
+	}else{
+		st_wdf->link_dest="\0";
+	}
+			
 	return 0;//take care of this return value in caller function.
 }
 					   
@@ -442,10 +494,10 @@ static int getEntry_depth_filepath(long int location,int *depth,char *file_path)
 }
 
 // Has side effects,file_path will be appropriately set.
-static int getEntry_file_path(long int location,char *file_path){
+static int getEntry_filepath(long int location,char *file_path){
 	int depth;
 	return getEntry_depth_filepath(location,&depth,file_path);
-	//printf("in getEntry_file_path %d,%s\n",location,file_path);
+	//printf("in getEntry_filepath %d,%s\n",location,file_path);
 
 }
 
@@ -478,7 +530,7 @@ static int find_index(int searchPath_depth,long int *low,long int *high,long int
 static int find_lowest_index(int searchPath_depth,long int *low,long int *mid,int *depth){
 	//find the lowest index of catalog , having same depth as that of searchPath.
 	
-	int low_index_with_same_depth=*mid;
+	long int low_index_with_same_depth=*mid;
 	char file_path[MAXPATHLEN];
 	int ret_val;
 	
@@ -499,7 +551,7 @@ static int find_highest_index(int searchPath_depth,long int *high,long int *mid,
 	//find the highest index of catalog , having same depth as that of searchPath.
 	
 	char file_path[MAXPATHLEN];
-	int high_index_with_same_depth=*mid;		
+	long int high_index_with_same_depth=*mid;		
 	int ret_val;
 	while(*depth==searchPath_depth){
 		high_index_with_same_depth++;			
@@ -516,10 +568,10 @@ static int find_highest_index(int searchPath_depth,long int *high,long int *mid,
 
 //return's location of the 'searchPath' input
 static int binSearch(char *searchPath){
-	long int low=0,high=catalog_len-1,mid;
+	long int low=0,high=catalog_len-1,mid,result=-1;
 	char file_path[MAXPATHLEN];
 	int comp_result=0,no_of_comp=0;
-	int depth=1,result=-1;
+	int depth=1;
 	int ret_val;
 	int searchPath_depth=findDepth(searchPath);
 	
@@ -553,7 +605,7 @@ static int binSearch(char *searchPath){
 			mid=calculateMid(low,high);
 			//printf("mid=%ld,low=%ld,high=%ld\n",mid,low,high);
 		
-			ret_val=getEntry_file_path(mid,file_path);
+			ret_val=getEntry_filepath(mid,file_path);
 			if(ret_val<0)
 				return -1;
 		
@@ -581,7 +633,8 @@ static int binSearch(char *searchPath){
 static int get_directory_contents(char *file_path,long int *low, long int *high){
 	int len=strlen(file_path);
 	char entry_file_path[MAXPATHLEN];
-	int i,depth,entry_depth;
+	long int i;
+	int depth,entry_depth;
 	int ret_val;
 	
 	//printf(" len of %s = %d\n",file_path,len);
@@ -640,7 +693,7 @@ static int get_directory_contents(char *file_path,long int *low, long int *high)
 	return location;
 }*/
 
-// given full location of a file/dir  , return it's attributes in 'st_data'
+// given location of a file/dir  , return it's attributes in 'st_data'
 static int getattr_by_location(long int location,struct stat *st_data){
 	
 	int ret_val;
@@ -847,7 +900,7 @@ static int catalog_readdir(const char *path, void *buf, fuse_fill_dir_t filler,o
 		
 		//printf("Entered for loop\n");
 		ret_val=getattr_by_location(location,&st);
-		ret_val2=getEntry_file_path(location,pathname);
+		ret_val2=getEntry_filepath(location,pathname);
 		
 		//printf("path=%s, size=%d\n",pathname,(int)st.st_size);
 		
@@ -915,9 +968,6 @@ static int catalog_readdir(const char *path, void *buf, fuse_fill_dir_t filler,o
 	return 0;
 }
 
-
-
-
 static int catalog_readlink(const char *path, char *buf, size_t size){
 	/*int res;
 	path=translate_path(path);
@@ -931,23 +981,46 @@ static int catalog_readlink(const char *path, char *buf, size_t size){
 	return 0;*/
 	
 	(void)path;
-	(void)buf;
+	//(void)buf;
 	(void)size;
 	
-	//todo
-	//printf("size=%d\n",size);
-	strcpy(buf,"../.dir2");
+	//toodo
+	//printf("readlink size=%d maxpathlen=%d\n",size,MAXPATHLEN);
 	
+	long int location;
+	int ret_val;
+	//char link_dest[]="/.dir2";
+	//char mount_point_prefix[MAXPATHLEN];
 	
+	stat_wdf *st_wdf;
+	st_wdf=(stat_wdf*)malloc(sizeof(stat_wdf));
+	memset(st_wdf,0,sizeof(stat_wdf));
+	
+	location=binSearch((char*)path);
+	if(location<0)
+		return -ENOENT;
+
+	ret_val=getEntry_from_catalog(location,st_wdf);
+	if(ret_val<0)
+		return -ENOENT;
+	
+	//strcpy(mount_point_prefix,mount_point);
+			
+	//printf("path in readlink =%s\n",path);
+	printf("link_dest in readlink =%s\n",st_wdf->link_dest);
+	//strcpy(buf,strcat(mount_point_prefix,st_wdf->link_dest));
+	strncpy(buf,st_wdf->link_dest,size-1);
+		
 	//return -ENOENT;
 	return 0;
 }
 
 // Clean up filesystem. Called on filesystem exit.
 static void catalog_destroy(void *dummy){
-	// todo 
+	// toodo 
 	// cleanup datastructures used 
 	(void)dummy;
+	//printf("Entered destroy\n");
 	return;
 }
 
@@ -982,16 +1055,63 @@ static struct fuse_operations catalog_operations = {
 	.utimens	= catalog_utimens,
 	.truncate	= catalog_truncate,
 
-/*
-#ifdef HAVE_SETXATTR
+
+#ifdef HAVE_XATTR
 	.setxattr	= catalog_setxattr,
-	.getxattr	= catalog_getxattr, // implement 
-	.listxattr= catalog_listxattr,// implement 
+	.getxattr	= catalog_getxattr, 
+	.listxattr= catalog_listxattr,
 	.removexattr= catalog_removexattr,
-#endif */
+#endif 
 	
 };
 
 int main(int argc, char *argv[]){
+	//printf("argv[0]=%s\n",argv[0]); // /home/shabeer/projects/catalog_filesytem/catalogfs/catalogfs
+	//printf("argv[1]=%s\n",argv[1]); // -d 
+	//printf("argv[2]=%s\n",argv[2]); // /tmp/temp
+	//strcpy(mount_point,argv[2]);
+	char *input_check;
+	int error=0;
+	//	mount_point = getenv("CATALOGFS_MOUNT_DIR");
+	
+	catalogFile = getenv("CATALOGFS_CATALOG");
+	if (!catalogFile){
+		fprintf(stderr, "CATALOGFS_CATALOG not defined in environment.\n");
+		error=1;
+	}
+
+	input_check=getenv("CATALOGFS_ENTRY_SIZE");
+	if (!input_check){
+		fprintf(stderr, "CATALOGFS_ENTRY_SIZE not defined in environment.\n");
+		error=1;
+	}else{	
+		entry_size  = atoi(input_check);
+	}
+	
+	input_check=getenv("CATALOGFS_CATALOG_LEN");
+	if (!input_check){
+		fprintf(stderr, "CATALOGFS_CATALOG_LEN not defined in environment.\n");
+		error=1;
+	}else{	
+		catalog_len  = atol(input_check);
+	}
+	
+	if (!error && entry_size<13){
+		fprintf(stderr, "CATALOGFS_ENTRY_SIZE improper value is set, in environment.\n");
+		error=1;
+	}
+	
+	if (!error && catalog_len<=0){
+		fprintf(stderr, "CATALOGFS_CATALOG_LEN improper value is set, in environment.\n");
+		error=1;
+	}
+	
+	if(error){
+		printf("catalogFile=%s,entry_size=%d,catalog_len=%ld \n",catalogFile,entry_size,catalog_len);
+		exit(1);
+	}
+	
+	//exit(0);	
+	//printf("Entered ");
 	return fuse_main(argc,argv,&catalog_operations,NULL);
 }

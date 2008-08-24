@@ -1,0 +1,18 @@
+Status:
+This is stable snapshot of project.
+Program works perfectly in daemon as well as (Fuse)debug mode.
+catalogfsmount file is added to ease, mounting catalog_file using catalogfs.
+
+Todo:
+1. Cleanup the catalogfs.c file and add comments, so that it can be released.
+2. Write program to generate catalog_file.
+
+Future work:
+-------------
+Possible extensions:
+
+1.Create one README_CFS file(in root path of Filesystem) in which user can write notes for the catalog.
+The user will be open only this file. But cannot write to it.
+
+2.Store & show extended attributes of file.
+

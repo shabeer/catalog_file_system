@@ -1,0 +1,64 @@
+#!/bin/bash
+# This file is adapted from rofsmount of "read only file system" by "Matthew Keller"
+
+if [ $# -lt 2 ]; then
+    echo "Usage: $0 absolute_path_of_catalog_file mount-point" 1>&2
+    exit 1
+fi
+
+# Note: catalog_file should be an absolute_path. Otherwise program won't run in daemon mode.
+# However, relative path of catalog_file works in debug mode
+
+DEBUG="  ";
+#DEBUG=" -d ";
+
+# Check fuse module
+grep fuse /proc/modules > /dev/null 2>&1;
+#if [ -z "$(grep fuse /proc/modules > /dev/null 2>&1)" ]; then
+ret=$?;
+#echo "ret $ret xyz";
+if [ $ret != "0" ]; then
+    if [ $UID == 0 ]; then
+            modprobe fuse > /dev/null 2>&1 || {
+            echo "Could not load fuse kernel module !" 1>&2
+            exit 1
+        }
+    else
+        echo "You need the fuse kernel module to run this. As you are"
+        echo "not root, I can't load it. Become root and run :"
+        echo
+        echo "    modprobe fuse"
+        exit 1
+    fi
+fi
+
+if [ $UID == 0 ]; then
+    # Allow other users and check permissions if run by root
+    FILESYSTEM_PARAMETERS="${FILESYSTEM_PARAMETERS} -o allow_other"
+fi
+
+minlen=0;
+maxlen=0;
+minlen=`awk -F '' '{ print NF}' < $1 | sort -n|head -1`
+maxlen=`awk -F '' '{ print NF}' < $1 | sort -n|tail -1`
+
+if [ $maxlen -ne $minlen ]; then
+	echo "Entries in the catalog file are NOT of same size."
+	echo "$maxlen is not equal to $minlen"
+	exit 1
+fi
+
+mkdir $2 2>/dev/null
+
+export CATALOGFS_ENTRY_SIZE=`expr $minlen + 1`
+#echo "abc $CATALOGFS_ENTRY_SIZE xyz";
+
+#export CATALOGFS_MOUNT_DIR="$2"
+export CATALOGFS_CATALOG="$1"
+
+# number of entries in catalog file.
+export CATALOGFS_CATALOG_LEN=`wc -l $1| awk '{print $1}'`
+#echo "abc $CATALOGFS_CATALOG_LEN xyz";
+
+# Run the daemon
+eval ./catalogfs $DEBUG $FILESYSTEM_PARAMETERS $2
