@@ -1,13 +1,23 @@
 #!/bin/bash
+# This script is a wrapper script, to check catalog_file and mount it using catalogfs executable.
+#
+# Requirements: 
+#	1.Fuse kernel module.
+#	2.catalogfs and bytecount executable in current directory.
+#
 # This file is adapted from rofsmount of "read only file system" by "Matthew Keller"
+#
 
-if [ $# -lt 2 ]; then
+if [ $# -ne 2 ]; then
     echo "Usage: $0 absolute_path_of_catalog_file mount-point" 1>&2
     exit 1
 fi
 
 # Note: catalog_file should be an absolute_path. Otherwise program won't run in daemon mode.
 # However, relative path of catalog_file works in debug mode
+
+catalog_file=$1
+mount_point=$2
 
 DEBUG="  ";
 #DEBUG=" -d ";
@@ -37,28 +47,49 @@ if [ $UID == 0 ]; then
     FILESYSTEM_PARAMETERS="${FILESYSTEM_PARAMETERS} -o allow_other"
 fi
 
-minlen=0;
-maxlen=0;
-minlen=`awk -F '' '{ print NF}' < $1 | sort -n|head -1`
-maxlen=`awk -F '' '{ print NF}' < $1 | sort -n|tail -1`
+#minlen=0;
+#maxlen=0;
+#minlen=`awk -F '' '{ print NF}' < $catalog_file | sort -n|head -1`
+#maxlen=`awk -F '' '{ print NF}' < $catalog_file | sort -n|tail -1`
 
-if [ $maxlen -ne $minlen ]; then
+#if [ $maxlen -ne $minlen ]; then
+#	echo "Entries in the catalog file are NOT of same size."
+#	echo "$maxlen is not equal to $minlen"
+#	exit 1
+#fi
+
+#checking whether entries(lines) in catalog file are of same size.
+# nl should be 1;
+
+nl=`./bytecount $catalog_file | sort -u |wc -l`
+
+if [ $nl -ne 1 ]; then
 	echo "Entries in the catalog file are NOT of same size."
-	echo "$maxlen is not equal to $minlen"
 	exit 1
 fi
 
-mkdir $2 2>/dev/null
+mkdir -p $mount_point 2>/dev/null
 
 export CATALOGFS_ENTRY_SIZE=`expr $minlen + 1`
 #echo "abc $CATALOGFS_ENTRY_SIZE xyz";
 
-#export CATALOGFS_MOUNT_DIR="$2"
-export CATALOGFS_CATALOG="$1"
+#export CATALOGFS_MOUNT_DIR="$mount_point"
+export CATALOGFS_CATALOG="$catalog_file"
 
 # number of entries in catalog file.
-export CATALOGFS_CATALOG_LEN=`wc -l $1| awk '{print $1}'`
+export CATALOGFS_CATALOG_LEN=`wc -l $catalog_file| awk '{print $1}'`
 #echo "abc $CATALOGFS_CATALOG_LEN xyz";
 
+#check if (size of catalog_file is equal to number_of_entries * CATALOGFS_ENTRY_SIZE)
+file_size=`ls -lH $catalog_file | awk '{printf $5}'`
+expected_file_size=`expr $CATALOGFS_CATALOG_LEN \* $CATALOGFS_ENTRY_SIZE `
+
+#echo $file_size:$expected_file_size;
+
+if [ $file_size != $expected_file_size ] ; then
+	echo "catalog_file $catalog_file is not of expected_size:$expected_file_size";
+	exit 1;
+fi
+
 # Run the daemon
-eval ./catalogfs $DEBUG $FILESYSTEM_PARAMETERS $2
+eval ./catalogfs $DEBUG $FILESYSTEM_PARAMETERS $mount_point

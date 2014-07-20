@@ -1,0 +1,604 @@
+        -:    0:Source:generate_catalog.c
+        -:    0:Graph:generate_catalog.gcno
+        -:    0:Data:generate_catalog.gcda
+        -:    0:Runs:1
+        -:    0:Programs:1
+        -:    1:/*
+        -:    2: * This file generates catalog_file out of a given directory. 
+        -:    3: * 
+        -:    4: * Compilation;
+        -:    5: *	 gcc -Wall -ansi -W -std=c99 -g -ggdb -D_GNU_SOURCE generate_catalog.c -o generate_catalog
+        -:    6: *	
+        -:    7: * Execution:
+        -:    8: *	./generate_catalog mount_dir_path catalog_file
+        -:    9: *
+        -:   10: *	mount_dir_path: should be directory for which, file list(catalog) need to be created.
+        -:   11: *	catalog_file: File in which catalog will be written.
+        -:   12: *	catalog_file File will be created if not present. Overwrites, if present.
+        -:   13: * 
+        -:   14: * Limitations; 
+        -:   15: * 1. Currently, extended file attributes are not put in catalog_file,since catalogfs doesnot support it currently.
+        -:   16: */
+        -:   17:
+        -:   18:/* Status: 
+        -:   19: * [done]fixed memory leaks.
+        -:   20: * [done]Need to implement, padding \1 characters , so that each line has same no. of characters. Can be done using awk/sed.
+        -:   21: * [done]need to implement print_entry_to_catalog function().
+        -:   22: *
+        -:   23: * Checked memory leaks with
+        -:   24: * valgrind  --leak-check=full --show-reachable=yes ./generate_catalog /home/shabeer catalog_home_shabeer2.list.gen
+        -:   25: *
+        -:   26: * Todo:
+        -:   27: * -Try to correct pad_each_line. All lines are not having same number of characters in catalog_file
+        -:   28: * -ERROR:lstat return -1 for path=/home/shabeer/.VirtualBox/VDI/WindowsXP.vdi
+        -:   29: * -Profiling memory and time usage. Try to minimize memory usage.
+        -:   30: * -Clean up the comments.
+        -:   31: * -modify to have DEBUG statements,with different level of debug info.
+        -:   32: */
+        -:   33:
+        -:   34:#include <stdio.h>
+        -:   35:#include <dirent.h>
+        -:   36:#include <string.h>
+        -:   37:#include <sys/param.h>	/* for MAXPATHLEN */
+        -:   38:#include <errno.h>
+        -:   39:#include <error.h>
+        -:   40:#include <stdlib.h>
+        -:   41:#include <sys/types.h>
+        -:   42:#include <sys/stat.h>
+        -:   43:#include <unistd.h>
+        -:   44:
+        -:   45:
+        -:   46:FILE *fp_catalog_file;
+        -:   47:FILE *fp_catalog_file_temp;
+        -:   48:
+   135882:   49:int filter(const struct dirent *ent){
+   135882:   50:	if(strcmp(ent->d_name,".")==0 || strcmp(ent->d_name,"..")==0){
+   135882:   50-block  0
+   125956:   50-block  1
+    19852:   51:		return 0;
+    19852:   51-block  0
+        -:   52:	}
+   135882:   53:	return 1;
+   116030:   53-block  0
+   135882:   53-block  1
+        -:   54:}
+        -:   55:
+        -:   56:// filter_dir only succeeds for directory entry.
+    #####:   57:int filter_dir(const struct dirent *ent){
+    #####:   58:	if(ent->d_type==DT_DIR){
+    $$$$$:   58-block  0
+    #####:   59:		return 1;
+    $$$$$:   59-block  0
+        -:   60:	}
+    #####:   61:	return 0;
+    $$$$$:   61-block  0
+    $$$$$:   61-block  1
+        -:   62:}
+        -:   63:
+        -:   64://breadth-first queue
+        -:   65:struct bf_queue{
+        -:   66:	char dirname[MAXPATHLEN];
+        -:   67:	struct bf_queue* next;
+        -:   68:}*head,*tail;
+        -:   69:
+        1:   70:void init_queue(){
+        1:   71:	head=NULL;
+        1:   72:	tail=NULL;
+        1:   73:}
+        1:   73-block  0
+        -:   74:
+    #####:   75:void print_queue(){
+        -:   76:	struct bf_queue *current;
+    #####:   77:	current=head;
+    #####:   78:	while(current){
+    $$$$$:   78-block  0
+    $$$$$:   78-block  1
+    #####:   79:		printf("DEBUG:printing queue=%s\n",current->dirname);
+    $$$$$:   79-block  0
+    #####:   80:		current=current->next;
+        -:   81:	}
+    #####:   82:}
+    $$$$$:   82-block  0
+        -:   83:
+     9926:   84:int insert_queue(char dirname[MAXPATHLEN]){
+     9926:   85:	struct bf_queue *temp=NULL;
+        -:   86:	
+        -:   87:	//printf("DEBUG:Inserting =%s\n",dirname);
+     9926:   88:	temp=(struct bf_queue*)malloc(sizeof(struct bf_queue));
+     9926:   88-block  0
+     9926:   89:	if(temp==NULL)
+    #####:   90:		return -1;
+    $$$$$:   90-block  0
+        -:   91:	
+     9926:   92:	strcpy(temp->dirname,dirname);
+     9926:   92-block  0
+     9926:   93:	temp->next=NULL;
+        -:   94:	
+     9926:   95:	if(head==NULL){
+        -:   96:		//printf("DEBUG: head is null:%s\n",dirname);
+        2:   97:		head=temp;
+        2:   98:		tail=temp;
+        2:   98-block  0
+        -:   99:	}else{
+        -:  100:		//printf("DEBUG: head is NOT null:%s\n",dirname);
+     9924:  101:		tail->next=temp;
+     9924:  102:		tail=tail->next;
+     9924:  102-block  0
+        -:  103:	}
+        -:  104:	//print_queue();
+     9926:  105:	return 0;
+     9926:  105-block  0
+     9926:  105-block  1
+        -:  106:}
+        -:  107:
+     9926:  108:char *remove_queue(){
+     9926:  109:	struct bf_queue *temp=NULL;
+        -:  110:	char *dirname;
+        -:  111:	
+     9926:  112:	dirname=(char *)malloc(sizeof(char)*MAXPATHLEN);
+     9926:  112-block  0
+     9926:  113:	if(dirname==NULL){
+    #####:  114:		printf("ERROR: could not allocate memory, line number:%d\n",__LINE__);
+    $$$$$:  114-block  0
+        -:  115:	}
+        -:  116:	
+     9926:  117:	if(head==NULL){
+     9926:  117-block  0
+    #####:  118:		return NULL;
+    $$$$$:  118-block  0
+        -:  119:	}
+     9926:  120:	temp=head;
+     9926:  121:	head=head->next;
+        -:  122:	
+        -:  123:	//print_queue();
+     9926:  124:	strcpy(dirname,temp->dirname);
+     9926:  124-block  0
+     9926:  125:	free(temp);
+        -:  126:	
+     9926:  127:	return dirname;
+     9926:  127-block  0
+        -:  128:}
+        -:  129:
+        -:  130:typedef struct stat_with_depth_filepath{
+        -:  131:	int depth;
+        -:  132:	char	*file_path;
+        -:  133:	struct stat st_data;
+        -:  134:	char *link_dest;
+        -:  135:}stat_wdf;
+        -:  136:
+   251912:  137:int findDepth(char *path){
+        -:  138:	// returns depth of path . 
+        -:  139:	// depth = number of "/" in the path
+        -:  140:	// limitation: path should NOT contain escaped "/"
+   251912:  141:	int path_len=strlen(path);
+   251912:  141-block  0
+   251912:  142:	int count=0;
+        -:  143:	int i;
+        -:  144:	
+   251912:  145:	if(path==NULL || path[0]!='/'){
+   251912:  145-block  0
+    #####:  146:		return -1;
+    $$$$$:  146-block  0
+        -:  147:	}
+        -:  148:	
+ 19733516:  149:	for(i=0;i<path_len;i++){
+   251912:  149-block  0
+ 19481604:  149-block  1
+ 19733516:  149-block  2
+ 19481604:  150:		if(path[i]=='/')
+ 19481604:  150-block  0
+  1947388:  151:			count++;
+  1947388:  151-block  0
+        -:  152:	}
+   251912:  153:	return count; //
+   251912:  153-block  0
+   251912:  153-block  1
+        -:  154:}
+        -:  155:
+   125956:  156:void print_entry_to_catalog(stat_wdf *st_wdf,const char *input_dir){
+        -:  157:	
+        -:  158:	//	sscanf(entry,"%c %lo %ld %ld %ld %lld %lld %lld %lld %d \1%[^\1]s\1\n",&c,&mode,&nlink,&uid,&gid,&size,&atime,&mtime,&ctime,&depth,file_path); //\1 is used as separator.
+        -:  159:	int mode,temp;
+   125956:  160:	char c='f'; //by default, file is considered to be 'regular file'
+        -:  161:	int input_dir_len;
+        -:  162:	int depth;
+        -:  163:	char errormsg[256];
+        -:  164:	
+   125956:  165:	if(strlen(input_dir)==0){
+   125956:  165-block  0
+    #####:  166:		sprintf(errormsg,"\nERROR:Empty input_dir:%s",input_dir);
+    $$$$$:  166-block  0
+    #####:  167:		error(0,0,errormsg);
+    #####:  168:		exit(-1);
+        -:  169:	}
+   125956:  170:	input_dir_len=strlen(input_dir);
+   125956:  170-block  0
+        -:  171:	
+   125956:  172:	temp=((st_wdf->st_data.st_mode) & 0170000) >> 12 ;
+   125956:  173:	switch(temp){
+        1:  174:		case DT_FIFO: c='p';break;
+        1:  174-block  0
+    #####:  175:		case DT_CHR:  c='c';break;
+    $$$$$:  175-block  0
+    19851:  176:		case DT_DIR:  c='d';break;
+    19851:  176-block  0
+    #####:  177:		case DT_BLK:  c='b';break;
+    $$$$$:  177-block  0
+   106018:  178:		case DT_REG:  c='f';break;
+   106018:  178-block  0
+       85:  179:		case DT_LNK:  c='l';break;
+       85:  179-block  0
+        1:  180:		case DT_SOCK: c='s';break;
+        1:  180-block  0
+        -:  181:		// in other cases, 'regular file' would be assumed.
+        -:  182:	}
+        -:  183:	
+   125956:  184:	mode=(st_wdf->st_data.st_mode) & 07777; //get last 4 octals
+   125956:  185:	depth=findDepth((st_wdf->file_path) + input_dir_len);
+   125956:  185-block  0
+        -:  186:	
+        -:  187:	
+   125956:  188:	if(c=='l'){
+       85:  189:		fprintf(fp_catalog_file,"%c %lo %ld %ld %ld %lld %lld %lld %lld %d \1%s\2%s\1\n",
+       85:  189-block  0
+        -:  190:			c,
+        -:  191:			(long unsigned int)mode,
+        -:  192:			(long)st_wdf->st_data.st_nlink,
+        -:  193:			(long)st_wdf->st_data.st_uid,
+        -:  194:			(long)st_wdf->st_data.st_gid,
+        -:  195:			(long long)st_wdf->st_data.st_size,
+        -:  196:			(long long)st_wdf->st_data.st_atime,
+        -:  197:			(long long)st_wdf->st_data.st_mtime,
+        -:  198:			(long long)st_wdf->st_data.st_ctime,
+        -:  199:			depth,
+        -:  200:			(st_wdf->file_path) + input_dir_len,
+        -:  201:			st_wdf->link_dest);
+        -:  202:	}else{
+   125871:  203:		fprintf(fp_catalog_file,"%c %lo %ld %ld %ld %lld %lld %lld %lld %d \1%s\1\n",
+   125871:  203-block  0
+        -:  204:			c,
+        -:  205:			(long unsigned int)mode,
+        -:  206:			(long)st_wdf->st_data.st_nlink,
+        -:  207:			(long)st_wdf->st_data.st_uid,
+        -:  208:			(long)st_wdf->st_data.st_gid,
+        -:  209:			(long long)st_wdf->st_data.st_size,
+        -:  210:			(long long)st_wdf->st_data.st_atime,
+        -:  211:			(long long)st_wdf->st_data.st_mtime,
+        -:  212:			(long long)st_wdf->st_data.st_ctime,
+        -:  213:			depth,
+        -:  214:			(st_wdf->file_path) + input_dir_len);
+        -:  215:	}
+        -:  216:	
+   125956:  217:	fflush(fp_catalog_file);
+   125956:  217-block  0
+   125956:  218:	free(st_wdf);
+        -:  219:	return;
+        -:  220:}
+        -:  221:
+        -:  222:
+   125956:  223:void print_to_catalog(char *path,const char *input_dir){
+        -:  224:	int result;
+        -:  225:	struct stat *st_data;
+        -:  226:	stat_wdf *st_wdf;
+        -:  227:	char link_buf[MAXPATHLEN];
+        -:  228:				
+   125956:  229:	st_data=(struct stat *)malloc(sizeof(struct stat));
+   125956:  229-block  0
+   125956:  230:	if(st_data==NULL){
+    #####:  231:		printf("ERROR: could not allocate memory\n");
+    $$$$$:  231-block  0
+        -:  232:	}
+        -:  233:	
+   125956:  234:	st_wdf=(stat_wdf*)malloc(sizeof(stat_wdf));
+   125956:  234-block  0
+   125956:  235:	if(st_wdf==NULL){
+    #####:  236:		printf("ERROR: could not allocate memory\n");
+    $$$$$:  236-block  0
+        -:  237:	}
+        -:  238:	
+   125956:  239:	result = lstat(path, st_data);
+   125956:  239-block  0
+   125956:  240:	if(result == -1) {
+        1:  241:		printf("ERROR:lstat return -1 for path=%s\n",path);
+        1:  241-block  0
+        -:  242:	}
+        -:  243:
+   125956:  244:	st_wdf->st_data.st_mode  =st_data->st_mode;  // %y  and %#m
+   125956:  245:	st_wdf->st_data.st_nlink =st_data->st_nlink;  //%n
+   125956:  246:	st_wdf->st_data.st_uid   =st_data->st_uid; //%U
+   125956:  247:	st_wdf->st_data.st_gid   =st_data->st_gid; //%G
+   125956:  248:	st_wdf->st_data.st_size  =st_data->st_size; //%s
+   125956:  249:	st_wdf->st_data.st_atime =st_data->st_atime; //%A@
+   125956:  250:	st_wdf->st_data.st_mtime =st_data->st_mtime; //%T@
+   125956:  251:	st_wdf->st_data.st_ctime =st_data->st_ctime; //%C@
+        -:  252:	
+   125956:  253:	st_wdf->depth=findDepth(path);
+   125956:  253-block  0
+   125956:  254:	st_wdf->file_path=path;
+        -:  255:	
+        -:  256:	//todo, handle advanced cases of link file
+        -:  257:	// 1. link destination points to , within the input_dir(/tmp/temp). eg   /tmp/temp/dir1/linkfile1 -> /tmp/temp/dir2
+        -:  258:	// 2. link destination points to , outside the input_dir eg:   /tmp/temp/dir1/linkfile1 -> /usr/dir/file
+        -:  259:	// 3a. link destination points to , relative location.(which is outside input_dir)
+        -:  260:	//	eg: /tmp/temp/dir1/linkfile -> ../../../home (which actually points to /home)
+        -:  261:	// 3b. link destination points to , relative location.(which is outside input_dir) 
+        -:  262:	//	eg: /tmp/temp/dir1/linkfile -> ../dir2 (which actually points to /tmp/temp/dir2)
+        -:  263:	
+   125956:  264:	if(  (((st_wdf->st_data.st_mode) & 0170000) >> 12) == DT_LNK){
+       85:  265:		result = readlink(path, link_buf, MAXPATHLEN - 1);
+       85:  265-block  0
+       85:  266:		if(result == -1) {
+    #####:  267:			printf("ERROR: could not readlink of path=%s\n",path);
+    $$$$$:  267-block  0
+        -:  268:			//return -errno;
+        -:  269:		}
+       85:  270:		link_buf[result] = '\0';
+       85:  271:		st_wdf->link_dest=link_buf;
+       85:  271-block  0
+        -:  272:		//st_wdf->link_dest="abc";
+        -:  273:	}else{
+   125871:  274:		st_wdf->link_dest="\0";
+   125871:  274-block  0
+        -:  275:	}
+        -:  276:	
+   125956:  277:	print_entry_to_catalog(st_wdf,input_dir);
+   125956:  277-block  0
+        -:  278:	//printf("%s\n",path);
+   125956:  279:	free(st_data);
+   125956:  280:}
+        -:  281:
+        1:  282:int catalog_listing(const char *input_dir){
+        -:  283:	struct dirent **namelist;
+        -:  284:	char errormsg[256];
+        1:  285:	int i=0,n;
+        -:  286:	char current_dir[MAXPATHLEN];
+        -:  287:	char *remove_queue_retval;
+        -:  288:	struct bf_queue *current_q;
+        -:  289:	
+        1:  290:	init_queue();
+        1:  290-block  0
+        -:  291:	
+        1:  292:	strcpy(current_dir,input_dir);
+        -:  293:	//current_dir=input_dir;
+        -:  294:	
+        1:  295:	insert_queue(current_dir);
+        -:  296:	
+        1:  297:	current_q=head;
+     9927:  298:	while(current_q){
+     9927:  298-block  0
+        -:  299:		// toodo check memory leak , in below 2 lines.
+     9926:  300:		remove_queue_retval=remove_queue();
+     9926:  300-block  0
+     9926:  301:		if(remove_queue_retval==NULL){
+    #####:  302:			printf("ERROR: remove_queue return NULL value\n");
+    $$$$$:  302-block  0
+        -:  303:		}
+     9926:  304:		strcpy(current_dir,remove_queue_retval);
+     9926:  304-block  0
+     9926:  305:		free(remove_queue_retval);
+        -:  306:		
+        -:  307:		char temp[MAXPATHLEN];
+     9926:  308:		strcpy(temp,current_dir);
+     9926:  309:		strcat(temp,"/");
+     9926:  310:		print_to_catalog(temp,input_dir);
+        -:  311:		//printf("\nd_type=%d,d_name=%s\n",4,temp);
+        -:  312:		
+        -:  313:		//printf("\nd_type=4,d_name=%s/\n",current_dir);
+        -:  314:		//printf("\ndirectory:%s\n",current_dir);
+        -:  315:
+     9926:  316:		n = scandir(current_dir, &namelist, filter, alphasort);
+        -:  317:	
+     9926:  318:		if (n < 0){
+    #####:  319:			sprintf(errormsg,"\nERROR:scandir return non-zero value. \nInput Directory=%s",current_dir);
+    $$$$$:  319-block  0
+    #####:  320:			error(0,errno,errormsg);
+        -:  321:			//return 1;
+        -:  322:		
+     9926:  323:		}else if(n==0){
+     9926:  323-block  0
+        -:  324:			//printf("INFO:Empty directory:%s\n",current_dir);
+        -:  325:			//return 1;
+        -:  326:		
+        -:  327:		}else {
+   125073:  328:			for(i=0;i<n;i++) {
+     9043:  328-block  0
+   116030:  328-block  1
+   125073:  328-block  2
+        -:  329:				char temp[MAXPATHLEN];
+   116030:  330:				strcpy(temp,current_dir);
+   116030:  330-block  0
+   116030:  331:				strcat(temp,"/");
+   116030:  332:				strcat(temp,namelist[i]->d_name);
+   116030:  333:				print_to_catalog(temp,input_dir);
+        -:  334:				//printf("d_type=%d,d_name=%s\n",namelist[i]->d_type,temp);
+        -:  335:				//printf("d_type=%d,d_name=%s/%s\n",namelist[i]->d_type,current_dir,namelist[i]->d_name);
+        -:  336:				
+        -:  337:				//print_to_catalog();
+        -:  338:				
+   116030:  339:				if(namelist[i]->d_type==DT_DIR){
+        -:  340:				// insert in the breadth-first queue
+        -:  341:					char temp[MAXPATHLEN];
+     9925:  342:					strcpy(temp,"");
+     9925:  342-block  0
+     9925:  343:					strcat(temp,current_dir);
+     9925:  344:					strcat(temp,"/");
+     9925:  345:					strcat(temp,namelist[i]->d_name);
+     9925:  346:					if(insert_queue(temp)==-1){
+    #####:  347:						printf("ERROR:Could not insert into to queue\n");
+    $$$$$:  347-block  0
+        -:  348:					}
+        -:  349:				}
+        -:  350:			}
+        -:  351:	
+        -:  352:			// clean-up dynamic allocated memory.
+   125073:  353:			for(i=0;i<n;i++) {
+     9043:  353-block  0
+   125073:  353-block  1
+   116030:  354:				free(namelist[i]);
+   116030:  354-block  0
+        -:  355:			}
+     9043:  356:			free(namelist);
+     9043:  356-block  0
+        -:  357:		}
+     9926:  358:		current_q=head;
+     9926:  358-block  0
+        -:  359:	}
+        -:  360:	
+        1:  361:	return 0;
+        1:  361-block  0
+        -:  362:}
+        -:  363:
+        -:  364:
+        -:  365:// This function pads at the end of each line, with required number of \1 characters.
+        1:  366:int pad_each_line(){
+        -:  367:		
+        1:  368:	char * line = NULL;
+        1:  369:	size_t len = 0;
+        -:  370:	ssize_t read_nchars;
+        1:  371:	ssize_t max_len=0;
+        1:  372:	int i=0;
+        -:  373:
+        -:  374:	//rewind(fp_catalog_file);
+        1:  375:	fseek(fp_catalog_file, 0L, SEEK_SET);
+        1:  375-block  0
+        -:  376:	
+   125960:  377:	while ((read_nchars = getline(&line, &len, fp_catalog_file)) != -1) {
+   125960:  377-block  0
+        -:  378:		//printf("Retrieved line of length %zu :\n", read_nchars);
+   125959:  379:		max_len=(read_nchars>max_len)?read_nchars:max_len;
+   125959:  379-block  0
+        -:  380:		//printf("%s", line);
+        -:  381:	}
+        -:  382:	//printf("Max line length:%d\n",max_len);
+        -:  383:	
+        1:  384:	fseek(fp_catalog_file, 0L, SEEK_SET);
+        1:  384-block  0
+        1:  385:	fseek(fp_catalog_file_temp, 0L, SEEK_SET);
+        -:  386:	
+   125960:  387:	while ((read_nchars = getline(&line, &len, fp_catalog_file)) != -1) {
+   125960:  387-block  0
+   125959:  388:		fprintf(fp_catalog_file_temp,"%.*s",strlen(line)-1,line);
+   125959:  388-block  0
+ 15505964:  389:		for(i=0; i<(int)max_len-(int)strlen(line) ; i++){
+ 15505964:  389-block  0
+ 15380005:  390:			fprintf(fp_catalog_file_temp,"\1");
+ 15380005:  390-block  0
+        -:  391:		}
+   125959:  392:		fprintf(fp_catalog_file_temp,"\n");
+   125959:  392-block  0
+        -:  393:	}
+        -:  394:	
+        1:  395:	if (line!=NULL){
+        1:  395-block  0
+        1:  396:		free(line);
+        1:  396-block  0
+        -:  397:	}
+        -:  398:	
+        1:  399:	return 0;
+        1:  399-block  0
+        -:  400:}
+        -:  401:
+    #####:  402:void usage(){
+    #####:  403:	printf("Usage:\n");
+    $$$$$:  403-block  0
+    #####:  404:	printf("$0  mount_dir_path catalog_file\n");
+    #####:  405:	printf("mount_dir_path: should be directory for which, file list(catalog) need to be created.\n");
+    #####:  406:	printf("catalog_file: File in which catalog will be written.\n");
+    #####:  407:	printf("catalog_file File will be created if not present. Overwriten, if present.\n");
+    #####:  408:	printf("\nExample:\n");
+    #####:  409:	printf("$0  /tmp/temp  catalog.list.gen\n"); 
+    #####:  410:}
+        1:  411:int main(int argc, char *argv[]){
+        -:  412:	char input_dir[MAXPATHLEN];
+        -:  413:	char catalog_file[MAXPATHLEN];
+        -:  414:	char catalog_file_temp[MAXPATHLEN];
+        -:  415:	struct stat buf;
+        -:  416:	
+        -:  417:	char errormsg[256];
+        -:  418:	int status;
+        -:  419:	
+        1:  420:	if(argc!=3){
+        1:  420-block  0
+    #####:  421:		usage();
+    $$$$$:  421-block  0
+    #####:  422:		exit(-1);
+        -:  423:	}
+        -:  424:		
+        -:  425:	//toodo input_dir as command parameter.
+        -:  426:	//toodo catalog_file as command parameter.
+        -:  427:	//strcpy(input_dir,"/tmp/temp/");
+        -:  428:	//strcpy(catalog_file,"catalog.list.gen");
+        -:  429:	
+        1:  430:	strcpy(input_dir,argv[1]);
+        1:  430-block  0
+        1:  431:	strcpy(catalog_file,argv[2]);
+        -:  432:	
+        1:  433:	if(strlen(input_dir)<=0 || strlen(catalog_file)<=0){
+        1:  433-block  0
+    #####:  434:		printf("Empty input_dir or catalog_filen\n");
+    $$$$$:  434-block  0
+    #####:  435:		exit(-1);
+        -:  436:	}
+        -:  437:	
+        -:  438:	//toodo 
+        -:  439:	//if(strlen
+        -:  440:	
+        -:  441:	//toodo check if input_dir is actually present, and if it is directory. It could be (regular/non-regular) file.
+        1:  442:	sprintf(errormsg,"\nERROR:Cannot get statistics of the directory:%s",input_dir);
+        1:  442-block  0
+        1:  443:	if(stat(input_dir,&buf)!=0){
+    #####:  444:		error(0,errno,errormsg);
+    $$$$$:  444-block  0
+    #####:  445:		exit(-1);
+        -:  446:	}else{
+        1:  447:		if( ! S_ISDIR(buf.st_mode)) { // not a directory.
+        1:  447-block  0
+    #####:  448:			sprintf(errormsg,"\nERROR:Not a directory:%s",input_dir);
+    $$$$$:  448-block  0
+    #####:  449:			error(0,errno,errormsg);
+    #####:  450:			exit(-1);
+        -:  451:		}
+        -:  452:	}
+        -:  453:	
+        -:  454:	//toodo : input_dir, should always be ended with /.  Since this is must for cataloging slash(/) directory 
+        -:  455:	
+        1:  456:	sprintf(errormsg,"\nERROR:Cannot open catalog file for writing:%s",catalog_file);
+        1:  456-block  0
+        -:  457:		
+        1:  458:	fp_catalog_file = fopen(catalog_file, "w+");
+        -:  459:	
+        1:  460:	strcpy(catalog_file_temp,catalog_file);
+        1:  461:	strncat(catalog_file_temp,".temp",5);
+        1:  462:	fp_catalog_file_temp = fopen(catalog_file_temp, "w+");
+        -:  463:	//fp_catalog_file=stdout; 
+        -:  464:
+        1:  465:	if (fp_catalog_file == NULL) {
+    #####:  466:		error(0,errno,errormsg);
+    $$$$$:  466-block  0
+        -:  467:		//fprintf(stderr,"\nCannot open catalog file:%s:%s",catalogFile,sys_errlist[]);
+        -:  468:		//fprintf(stderr,"ERROR:Unmount the mount point and retry by giving proper catalog file\n");
+    #####:  469:		exit(-1);
+        -:  470:	}
+        1:  471:	catalog_listing(input_dir);
+        1:  471-block  0
+        1:  472:	pad_each_line();
+        -:  473:	
+        1:  474:	fclose(fp_catalog_file);
+        1:  475:	fclose(fp_catalog_file_temp);
+        -:  476:	
+        -:  477:	//printf("old_file=%s",catalog_file_temp);
+        1:  478:	sprintf(errormsg,"\nERROR:Cannot rename file:%s to file:%s",catalog_file_temp,catalog_file);
+        1:  479:	status=rename(catalog_file_temp,catalog_file);
+        1:  480:	if(status!=0){
+    #####:  481:		error(0,errno,errormsg);
+    $$$$$:  481-block  0
+    #####:  482:		printf("Created catalog file:%s\n",catalog_file_temp);
+    #####:  483:		exit(-1);
+        -:  484:	}else {
+        1:  485:		printf("Successfully created catalog: %s\n",catalog_file);
+        1:  485-block  0
+        -:  486:	}
+        -:  487:	
+        1:  488:	return 0;
+        -:  489:}
+        -:  490:

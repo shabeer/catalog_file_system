@@ -330,7 +330,7 @@ static int getEntry_from_catalog(long int location,stat_wdf *st_wdf){
 }*/
 
 	int fd;
-	char errormsg[255];
+	char errormsg[256];
 	char entry[entry_size+1];
 	
 //	strcat(errormsg,catalogFile);  //stack smashing problem.

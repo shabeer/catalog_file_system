@@ -1,0 +1,171 @@
+/*
+ * This file generates catalog_file out of a given directory. 
+ * 
+ * Compilation;
+ *	todo: gcc -Wall -ansi -W -std=c99 -g -ggdb -D_GNU_SOURCE generate_catalog.c -o generate_catalog
+ *	
+ * Execution:
+ *	./generate_catalog directory_path catalog_file
+ *
+ *	directory_path:
+ *	catalog_file: File in which catalog will be written.
+ *	catalog_file File will be created if not present. Overwrites, if present.
+ * 
+ * Limitations; 
+ * 1. Currently, extended file attributes are not put in catalog_file,since catalogfs doesnot support it currently.
+ */
+
+
+//	sscanf(entry,"%c %lo %ld %ld %ld %lld %lld %lld %lld %d \1%[^\1]s\1\n",&c,&mode,&nlink,&uid,&gid,&size,&atime,&mtime,&ctime,&depth,file_path); //\1 is used as separator.
+
+#include <stdio.h>
+#include <dirent.h>
+#include <string.h>
+#include <sys/param.h>	/* for MAXPATHLEN */
+#include <errno.h>
+#include <stdlib.h>
+
+int filter(const struct dirent *ent){
+	if(strcmp(ent->d_name,".")==0 || strcmp(ent->d_name,"..")==0){
+		return 0;
+	}
+	return 1;
+}
+
+// filter_dir only succeeds for directory entry.
+int filter_dir(const struct dirent *ent){
+	if(ent->d_type==DT_DIR){
+		return 1;
+	}
+	return 0;
+}
+
+//breadth-first queue
+struct bf_queue{
+	char dirname[MAXPATHLEN];
+	struct bf_queue* next;
+}*head,*tail;
+
+void init_queue(){
+	head=NULL;
+	tail=NULL;
+}
+int insert_queue(char dirname[MAXPATHLEN]){
+	struct bf_queue *temp=NULL;
+	
+	temp=(struct bf_queue*)malloc(sizeof(struct bf_queue));
+	if(temp==NULL)
+		return -1;
+	
+	strcpy(temp->dirname,dirname);
+	temp->next=NULL;
+	
+	if(head==NULL){
+		head=temp;
+		tail=temp;
+	}else{
+		tail->next=temp;
+		tail=tail->next;
+	}
+	return 0;
+}
+
+char *remove_queue(){
+	struct bf_queue *temp=NULL;
+	
+	if(head==NULL){
+		return NULL;
+	}
+	temp=head;
+	head=head->next;
+	
+	return temp->dirname;
+}
+
+int catalog_listing(const char *input_dir){
+	struct dirent **namelist;
+	char errormsg[256];
+	int i=0,n;
+	char current_dir[MAXPATHLEN];
+	struct bf_queue *current_q;
+	
+	init_queue();
+	
+	strcpy(current_dir,input_dir);
+	
+	insert_queue(current_dir);
+	
+	current_q=head;
+	while(current_q){
+		printf("directory:%s\n",remove_queue());
+			
+			
+		current_q=current_q->next;
+	}
+	
+	
+	
+	n = scandir(current_dir, &namelist, filter, alphasort);
+	
+	if (n < 0){
+		sprintf(errormsg,"\nERROR:scandir return non-zero value. Input Directory=%s",current_dir);
+		error(0,errno,errormsg);
+		//return 1;
+		
+	}else if(n==0){
+		printf("Empty directory:%s\n",current_dir);
+		//return 1;
+		
+	}else {
+		for(i=0;i<n;i++) {
+			//todo: print entry into catalog file.
+			printf("d_name=%s,d_type=%d\n",namelist[i]->d_name,namelist[i]->d_type);
+			
+			if(namelist[i]->d_type==DT_DIR){
+				// insert in the breadth-first queue
+				char temp[MAXPATHLEN];
+				strcpy(temp,"");
+				strcat(temp,current_dir);
+				strcat(temp,"/");
+				strcat(temp,namelist[i]->d_name);
+				if(insert_queue(temp)==-1){
+					printf("ERROR:Could not insert into to queue\n");
+				}
+			}
+		}
+		
+		// clean-up dynamic allocated memory.
+		for(i=0;i<n;i++) {
+			free(namelist[i]);
+		}
+		free(namelist);
+		
+		
+		/*current_q=head;
+		while(current_q){
+			printf("directory:%s\n",remove_queue());
+			
+			
+			current_q=current_q->next;
+		}*/
+		
+		
+	}
+	
+	
+	
+	
+	
+	return 0;
+}
+
+int main(void){
+	char input_dir[MAXPATHLEN];
+	char catalog_file[MAXPATHLEN];
+	
+	strcpy(input_dir,"/tmp/temp");
+	strcpy(catalog_file,"catalog.list.gen");
+	
+	catalog_listing(input_dir);
+	return 0;
+}

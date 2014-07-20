@@ -1,11 +1,18 @@
 Status:
+--------
 This is stable snapshot of project.
 Program works perfectly in daemon as well as (Fuse)debug mode.
 catalogfsmount file is added to ease, mounting catalog_file using catalogfs.
 
 Todo:
+-----
 1. Cleanup the catalogfs.c file and add comments, so that it can be released.
 2. Write program to generate catalog_file.
+
+Features:
+---------
+1. Catalog_file contents can be dynamically (properly)changed. 
+The program will automatically take the updated catalog_file contents.
 
 Future work:
 -------------
