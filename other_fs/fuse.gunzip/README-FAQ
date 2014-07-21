@@ -1,0 +1,442 @@
+Q:  What is fuse.gunzip?
+
+A:  It is a fuse filesystem that provides transparent decompression
+    of previously reduced read only files.
+    More simply put, files can reside on disk compressed
+    and then be provided decompressed as needed.
+
+
+Q:  Does fuse.gunzip write files back to disk uncompressed?
+
+A:  No it stores uncompressed files in POSIX shared memory.
+
+
+Q:  Can I use fuse.gunzip to enable transparent decompression for / ?
+
+A:  If a box is configured to boot from initramfs or initrd then yes.
+    Otherwise, /bin /etc /lib /lib64 and /sbin should not contain
+    reduced files.
+    This way a box will boot even if
+    transparent decompression fails to start.
+
+
+Q:  What files can I reduce?
+
+A:  Please reduce only files that are installed on /usr
+    or any directory where transparent decompression was
+    enabled such as /opt or /home if the init script was
+    modified to provide transparent decompression for
+    those directories also.
+
+    Any type of regular file that is
+    not writeable by group or other can be reduced.
+    Less frequently read files are best candidates for reduction.
+    Reduced files become entirely read only.
+
+
+Q:  Why transparently decompress files on /usr ?
+
+A:  Most of the files install in /usr are only written only
+    when they are initially installed.
+    Therefore, they are excellent choices to become read only.
+
+    A large majority of the files installed in /usr are never read.
+    Yet their existence requires the filesystem be created larger
+    than necessary as compared to a filesystem if they were not installed.
+    However, removing files from /usr could cause source
+    and package managers to detect and fix the potential problem.
+    Or accidental removal of files that are required
+    could cause installed software to malfunction.
+    Therefore, removing unessential files is too dangerous.
+    However, reducing them is safe and saves space since
+    the uncompressed files remain fully available at any time
+    via transparent decompression
+
+
+Q:  I have huge drives!  Why bother saving space?
+
+A:  Extra blocks is merely a side boon.
+    fuse.gunzip's design is not to save space.
+    The point of compressed tarballs is to save space
+    and expedite transfer of files archived together.
+    Generally, there are no practical purposes for
+    filesystems with both transparent compression
+    and decompression on modern boxes.
+    For the few that exists their space savings does
+    not begin to approach the savings of a bzip2 compressed tarball.
+
+    fuse.gunzip's design is to improve performance.
+    CPUs are fast.
+    Disks are slow.
+    Reducing the work that the disk must do in order
+    to read files can improve performance.
+    Compressing files may reduce file fragmentation since
+    smaller files are less likely to be fragmented.
+    Also smaller files tend to read faster when
+    the drive seeks fewer sectors to read the file.
+    Therefore, a reduction of file size and fragmentation
+    may provide a speed gain that more than covers the
+    miniscule amount of CPU required to decompress a file.
+
+    Second, compression enables the same files
+    to be stored on a smaller partition.
+    Smaller partitions read and write files faster
+    not only because they have less overhead,
+    but because the files have a higher probability
+    of being physically closer to each other.
+
+
+Q:  With 2G of RAM and SATA drives
+    files are read once and cached forever.
+
+A:  There are some boxes where fuse.gunzip will not
+    create a significant performance improvement.
+
+
+Q:  Will fuse.gunzip improve performance on my i586 pentium mmx?
+
+A:  Modern CPUs have plenty of power for rapid decompression.
+    Sometimes older CPUs with newer drives may perform better
+    by merely waiting for the drive.
+    However, that does not mean that fuse.gunzip
+    should only be used on modern CPUs.
+    A boon for using fuse.gunzip can be gained by
+    reducing files that are rarely or never read.
+    It is not unlike the benefit of having
+    compressed manual pages installed.
+    Afterall, little to no CPU is spent on transparently
+    decompressing files that are almost never read.
+
+
+Q:  How about fuse.bunzip2 or fuse.p7unzip?
+
+A:  The project started as fuse.bunzip2.
+    After successful trials using bzip2
+    gzip was used instead because gzip
+    decompression is 5x to 10x faster than bzip2.
+
+    Yes bzip2 and p7zip provide better compression
+    at the cost of slower compression and decompression.
+    However, the savings is not usually significant
+    unless compressing files grouped within a tarball.
+    For compressing the majority of files in /usr 
+    gzip is nearly as efficient as bzip2 and p7zip.
+    Smaller files will probably have nearly the same
+    block counts as if bzip2 were used instead of gzip.
+
+    Please consider the following.
+    If a file compressed with gzip and bzip2
+    occupy the same number of filesystem blocks
+    and the gzipped file decompressed 10x faster
+    then which reduced file do you prefer?
+
+    Supporting both gzip and bzip2 simultaneously is a waste of CPU.
+    Reduction would have to compress a file twice and then decide
+    if the bzip2 block count is sufficiently smaller than gzip
+    to justify the reduced file being in bzip2.
+    If the bzip2 file was 5x smaller than the gzipped file
+    then bzip2 would probably be the better choice.
+    However, that rarely happens.
+
+
+Q:  Will fuse.gunzip slow down a box?
+
+A:  Perhaps, but probably not.
+    When reduced files are decompressed they are cached in POSIX shared memory.
+    A following open can read the uncompressed file from
+    POSIX shared memory instead of the disk.
+
+    Not every file on /usr must be reduced.
+    The SA may choose precisely which files to reduce.
+    For example files less than 2M in that are not fragmentted
+    could be omitted for reduction in the expectation that
+    the drive can burst read the unfragmentted 2M file just
+    as fast as if it was an unfragmentted compressed file.
+
+
+Q: I am brave enough to try it.  How do I set it up?
+
+A: 1.	Enable fuse support in the linux kernel.
+	With precompiled binary distributions of software
+	the default kernel probably comes with a fuse module.
+
+   2.	Install fuse under / and not /usr
+	Otherwise, fuse.gunzip will statically link
+	with libfuse and ulockmgr and become larger than necessary
+	but should work just fine.
+
+   3.	Enable POSIX shared memory on the box.
+	POSIX shared memory is normally enabled when the following line:
+	none    /dev/shm                tmpfs   defaults        0 0
+	exists in /etc/fstab
+
+   4.	From a root prompt execute
+	configure &&
+	make      &&
+	make install install.init &&
+	bash /etc/init.d/fuse.gunzip start
+
+   5.	If necessary then make symbolic links required to start
+	/etc/init.d/fuse.gunzip at boot.
+	If necessary modify /etc/init.d/fuse.gunzip
+	to work with the init system of the deployed distribution.
+
+   6.	Select files within /usr to reduce.
+	/usr/bin/reduce expects filenames as command line parameters.
+
+	Remember that reduced files report the same file size,
+	however they require less blocks on disk than uncompressed.
+	Therefore, du -k will report the correct block size while
+	ls -l reports the uncompressed size of the file.
+
+
+Q:  I tested fuse.gunzip on a gzipped file and it did not work.
+
+A:  The file size stored in the inode must be
+    the size of the uncompressed file.
+    gzip stores the the size of the compressed file.
+    That is why the reduce program
+    should be used to compress files instead of gzip.
+
+    The reduce program accepts filenames as command line parameters.
+    It deflates those files the same as gzip does.
+    Unlike gzip it stores the uncompressed file size
+    in the inode, does not add a .gz extention,
+    and removes any write bits from the file's permission mode.
+    Consequently, when the reduced file is listed with ls
+    it will appear to be unmodified.
+    However, df -k will repor that the file requires
+    less kilobytes than ls -kl suggests that it should.
+    Reduced files consume fewer blocks on disk
+    and therefore free additional space on a filesystem.
+
+    By piping together the commands:
+    find, file, grep, cut, grep, xargs, and reduce
+    a skilled SA can create a script that
+    selects appropriate files to be reduced.
+    When reducing files on /usr while transparent decompression
+    is enabled files can not be double reduced.
+    Attempting to double reduce merely wastes system resources.
+    However, if a file is double reduced by reducing it again
+    while transparent decompression is not enabled
+    then that file will no longer transparently decompress,
+    because it will be as if a file was gzip compressed more than once.
+
+
+Q:  How do I restore a reduced file to an uncompressed file?
+    Where is the unreduce command?
+
+A:  There are several methods.
+    While transparent decompression is enabled
+    make a copy of the file then mv the copy
+    to the original filename.
+    While transparent decompression is off
+    reduced files will have the peculiar distinction
+    of having a no write mode, and identify as
+    a gzip compressed file by the file command.
+    However, the file will probably not have an extention of .gz
+    Once those files are located, add a .gz to the
+    filename and then run gunzip on them.
+    That will restore the uncompressed file
+    and remove the compressed file.
+
+
+Q:  Why not transparent compresssion?
+
+A:  1.  Most files are opened read only.
+    Files opened for reading only that
+    are already compressed will not require recompression.
+
+    2.  Transparent compression could hog
+    system resources at an inconvenient time.
+    Without transparent compression the SA can
+    select exactly which files to compress and
+    then have them compressed at a time where
+    the load would not become an inconvenience.
+
+    3.  Transparent compression could have
+    moments of danger where a disruption
+    of the filesystem such as a system hang or reboot
+    with mounted filesytems could lead to data
+    loss and/or file corruption.
+
+    4.  Transparent compression with near flawless
+    support to ensure files do not corrupt would put
+    real pressure on a real filesystem to do so.
+    In other words it would cause a performance loss.
+
+    5.  Transparent decompression without
+    transparent compression is very simple
+    to implement and requires less overhead.
+
+    6.  Lastly and perhaps the best reason to not
+    support transparent compression is because
+    fuse version 2.6.1 does not support
+    writeable shared memory maps to files.
+    Therefore, some programs that try to use them
+    would fail with ENODEV or "No such device."
+    Consequently, fuse is best used for filesystems
+    for files that are intended to be read and not written.
+
+
+Q:  Why cache files reduced files when decompressing them?
+
+A:  The kernel caches blocks of files that exist
+    when those blocks are read.
+    Caching eliminates decompression time on subsequent reads.
+    If the kernel only cached the compressed file and not
+    the uncompressed file then each open of a reduced file
+    would require the additional time to decompress.
+    That type of implementation, which is standard in most types
+    of transparent decompression implementations,
+    creates a performance degradation instead of improvement.
+
+
+Q:  Where are uncompressed files cached?
+
+A:  They are cached in POSIX shared memory.
+    $ ls -a /dev/shm
+    Their names start end with .fguz
+    This enables subsequent reading to require only
+    a few miliseconds while the kernel is caching the file.
+
+    Originally the cache directory was configurable.
+    But POSIX shared memory is a bit easier and faster
+    to use since most boxes have enable it at boot.
+    You may also be able to mount ramfs instead of
+    tmpfs on /dev/shm to prohibit POSIX shared memory
+    objects from swapping to disk.
+
+
+Q:  How safe is fuse.gunzip?
+
+A:  I do not warranty that this softare will
+    not corrupt, truncate, erase or destroy files,
+    directories and file systems.
+    But it is still probably 10x safer than using a
+    newly developed filesystem since fuse.gunzip is
+    basically only an overlay.
+
+    When testing reduced files with gzip when transparent
+    decompression is not enabled please do not alarm
+    when gzip reports trailing garbage ignored.
+    This is normal since uncompressed file size is stored
+    in the inode instead of the compressed file size.
+    However, the blocks allocated for a reduced file
+    are only as many as required to hold the compressed file.
+    That is why reduced files appear to stay the
+    same size, but actually require less disk space.
+
+
+Q:  Why not use the ext2 extended attribute
+    compression bit to ID reduced files?
+
+A:  ext2 extended attributes may be unavailable
+    on filesystems that are not ext2 or ext3.
+    Because, fuse.gunzip does not use ext2 extended attributes
+    it can be used with almost any filesystem.
+
+
+Q:  What filesystems can fuse.gunzip performance enhanced?
+
+A:  Any filesytem that supports sparse 
+    files can be performance enhanced.
+    The filesystem must allow for a file
+    to have a smaller block count than
+    the file size suggests that it should require.
+    Works okay on ext2 and ext3 and probably should
+    work on most filesystems that POSIX compliant
+    distributions of free software are installed upon.    
+
+
+Q:  Can transparent decompression be used for /opt
+
+A:  Yes it can.
+    Modify the init script.
+
+
+Q:  Can transparent decompression be used for /home
+
+A:  Yes you can.
+    There are at least two obvious ways to configure it.
+
+    First, it can be configured the same way as transparent
+    decompression is configured for /usr.
+
+    However, even if transparent decompression is provided for /home
+    other users will probably be unaware of it and probably never
+    reduce even one of their files.
+    Consequently, it may be better to allow users to use transparent
+    decompression only for the files that they select, for example...
+
+    Let us say that the user account is david and that
+    david's home directory is /home/david/
+    If david wants to access reduced files in his home dir
+    with transparent decompression then he can first issue the commands:
+
+    $ cd
+    $ ln  -s  /media/fuse/bunzip2/home/david bunzip2
+    $ cd ~/bunzip2
+
+    The directory ~/bunzip2 looks looks exactly like a mirror of
+    david's home directory and it is.
+    However, when reduced files are accessed in ~/bunzip2
+    those files are transparently decompressed.
+
+    Since the location where files are stored or accessed tends
+    to be more flexible with in one's home directory compared to
+    those installed in /usr this method will work in many cases.
+    However, files and directories that begin with ~/.
+    such as ~/.bash_profile
+    should not be reduced unless transparent decompression is
+    enabled for all of /home the same way it is for /usr
+
+
+Q:  Is it safe for regular users to mount fuse.gunzip where they please?
+
+A:  Yes, because when mounted as a user fuse.gunzip
+    restrict file access based upon the permissions of that user.
+    However, this can also be a security risk when
+    the user mounting fuse.gunzip is root.
+    The fuse.gunzip mounts fuse.gunzip with
+    proper options to restrict file access according
+    not to the user who mounted fuse.gunzip
+    but according to those accessing the files.
+    This way user judy can not access user david's private files,
+    nor modify the filesystem as root can.
+
+
+Q:  What must I know to use fuse.gunzip on Sorcerer?
+
+A:  1.  # cast fuse.gunzip
+        Allow fuse.gunzip to run at boot.
+    2.  If fuse was not enabled in the kernel
+        then # cast -r linux
+        reboot.
+    3.  Enable reduce feature by # sorcery -> Config -> Toggle Features
+    4.  Spells installed prior to enabling the reduce feature can be
+        reduced using the # augur reduce
+    5.  After the reduce feature is enabled spells cast will
+        automatically install reduced files in /usr if both
+        the spell and SA permit that spell to reduce.
+    6.  SA permission to reduce spells is by default enabled
+        when the reduced feature is enabled.
+    7.  Automatic reduction of files when spells are cast can be
+        disabled on a spell by spell basis using # augur noreduce
+
+
+Q:  Will my backups, and archive files contained compressed files?
+
+A:  No.  Copies of the file are not compressed.
+    Therefore, more space on a backup partition may be required
+    when transparently compressed files are copied via
+    cp, rsync, scp, tar
+    Also extract files from an archive thereby overwriting the
+    transparently compressed files causes those files to be
+    restored to their uncompressed size and state.
+
+
+Q:  Will creating symbolic and hard links to a transparently
+    compressed file work and read with transparent decompression?
+
+A:  The simple answer is yes it should work as expected.

@@ -1,0 +1,10 @@
+#!/bin/bash
+# If the kernel mis-cached a file according to the block size 
+# of the compressed file instead of the inode's file size.
+# then running this script will cause the kernel to
+# forget the mistake and load the file completely.
+# I used this only once regarding an ELF library.
+# Perhaps adjusting mount options for /media/fuse/gunzip
+# could prevent the problem if it occurs frequently?
+
+echo 3 > /proc/sys/vm/drop_caches

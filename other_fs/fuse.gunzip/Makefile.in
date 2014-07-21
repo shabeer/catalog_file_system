@@ -1,0 +1,32 @@
+CC      = gcc
+LIMITS	= -DMAX_CACHED_FILES=4096 -DDEFAULT_CACHE_SIZE=100663296 -DLEN_CACHED_FILES=64
+CFLAGS  = %CFLAGS%
+LDFLAGS = %LDFLAGS%
+LIBDIRS = %LIBDIRS%
+FUSELIB = %LIBFUSE% %LIBULOCKMGR%
+
+all: fuse.gunzip reduce
+
+fuse.gunzip: fuse.gunzip.c
+	$(CC) $(CFLAGS) $(LDFLAGS) $(LIBDIRS) $(LIMITS) fuse.gunzip.c -o fuse.gunzip $(FUSELIB) %LIBZ%
+
+reduce: reduce.c
+	$(CC) $(CFLAGS) $(LIBDIRS) $(LDFLAGS) reduce.c -o reduce -lz
+
+install: fuse.gunzip reduce
+	mkdir   -m 0755 -p                  $(DESTDIR)/bin
+	rm      -f                          $(DESTDIR)/bin/fuse.gunzip
+	install -m 0755 fuse.gunzip         $(DESTDIR)/bin
+	install -m 0700 uncache             $(DESTDIR)/bin
+	mkdir   -m 0755 -p                  $(DESTDIR)/usr/bin
+	install -m 0755 reduce              $(DESTDIR)/usr/bin
+
+install.init: fuse.gunzip.init
+	mkdir   -m 0755 -p                  $(DESTDIR)/etc/init.d
+	install -m 0700 fuse.gunzip.init    $(DESTDIR)/etc/init.d/fuse.gunzip
+
+clean:
+	rm  -f  fuse.gunzip reduce
+
+distclean:
+	rm  -f  fuse.gunzip reduce Makefile

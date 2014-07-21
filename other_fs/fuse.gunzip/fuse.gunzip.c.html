@@ -1,0 +1,705 @@
+<html>
+<head>
+  <title>fuse.gunzip.c</title>
+</head>
+<body bgcolor="#ffffff" text="#000000">
+<pre>
+<font color="#444444">/*
+    fuse.gunzip
+    Copyright (C) 2006 Kyle Sallee &lt;kyle.sallee@gmail.com&gt;
+    All Rights Reserved
+
+    This may be modified and distributed using the same license
+    as fuse, filesystem in user space, is provided that you change
+    the name of your fork to avoid confusion with this project.
+    I prefer to be emailed contributions for improvements
+    unless modifications completely divirge from the goal 
+    of providing a filesystem performance booster.
+
+    Provided that fuse is started at boot
+    followed by the usr.fuse.gunzip script
+    and they both worked correctly
+    then files on /usr will be available
+    for transparent decompression.
+
+    The compilation command listed in the comments below
+    does not work for fuse.gunzip.c
+    Use make instead.
+*/</font>
+
+
+<font color="#444444">/*
+    FUSE: Filesystem in Userspace
+    Copyright (C) 2001-2006  Miklos Szeredi &lt;miklos@szeredi.hu&gt;
+
+    This program can be distributed under the terms of the GNU GPL.
+    See the file COPYING.
+
+    gcc -Wall `pkg-config fuse --cflags --libs` fusexmp_fh.c -o fusexmp_fh
+*/</font>
+
+<font color="0000ff"><strong>#define FUSE_USE_VERSION 26</strong></font>
+
+<font color="#444444">/*
+#include &lt;config.h&gt;
+*/</font>
+
+<font color="0000ff"><strong>#define HAVE_SETXATTR 1</strong></font>
+<font color="0000ff"><strong>#define HAVE_FDATASYNC 1</strong></font>
+
+<font color="0000ff"><strong>#define _GNU_SOURCE</strong></font>
+
+<font color="0000ff"><strong>#include <font color="#008000">&lt;fuse.h&gt;</font></strong></font>
+<font color="0000ff"><strong>#include <font color="#008000">&lt;ulockmgr.h&gt;</font></strong></font>
+<font color="0000ff"><strong>#include <font color="#008000">&lt;stdio.h&gt;</font></strong></font>
+<font color="0000ff"><strong>#include <font color="#008000">&lt;stdlib.h&gt;</font></strong></font>
+<font color="0000ff"><strong>#include <font color="#008000">&lt;string.h&gt;</font></strong></font>
+<font color="#444444">/* #include &lt;unistd.h&gt; */</font>
+<font color="0000ff"><strong>#include <font color="#008000">&lt;fcntl.h&gt;</font></strong></font>
+<font color="0000ff"><strong>#include <font color="#008000">&lt;dirent.h&gt;</font></strong></font>
+<font color="0000ff"><strong>#include <font color="#008000">&lt;errno.h&gt;</font></strong></font>
+<font color="0000ff"><strong>#include <font color="#008000">&lt;sys/time.h&gt;</font></strong></font>
+<font color="0000ff"><strong>#ifdef HAVE_SETXATTR</strong></font>
+<font color="0000ff"><strong>#include <font color="#008000">&lt;sys/xattr.h&gt;</font></strong></font>
+<font color="0000ff"><strong>#endif</strong></font>
+
+
+<font color="0000ff"><strong>#include <font color="#008000">&lt;sys/param.h&gt;</font>		<font color="#444444">	/* for MAXPATHLEN */</font></strong></font>
+<font color="0000ff"><strong>#include <font color="#008000">&lt;sys/types.h&gt;</font></strong></font>
+<font color="0000ff"><strong>#include <font color="#008000">&lt;sys/mman.h&gt;</font></strong></font>
+<font color="0000ff"><strong>#include <font color="#008000">&lt;sys/resource.h&gt;</font></strong></font>
+<font color="0000ff"><strong>#include <font color="#008000">&lt;pthread.h&gt;</font></strong></font>
+<font color="0000ff"><strong>#include <font color="#008000">&lt;zlib.h&gt;</font></strong></font>
+<font color="0000ff"><strong>#include <font color="#008000">&lt;err.h&gt;</font></strong></font>
+
+<font color="0000ff"><strong>#ifndef MAX_CACHED_FILES</strong></font>
+<font color="0000ff"><strong>#define	MAX_CACHED_FILES	4096</strong></font>
+<font color="0000ff"><strong>#endif</strong></font>
+
+<font color="0000ff"><strong>#ifndef LEN_CACHED_FILES</strong></font>
+<font color="0000ff"><strong>#define LEN_CACHED_FILES	64</strong></font>
+<font color="0000ff"><strong>#endif</strong></font>
+
+<font color="0000ff"><strong>#ifndef DEFAULT_CACHE_SIZE</strong></font>
+<font color="0000ff"><strong>#define DEFAULT_CACHE_SIZE	96 * 1024 * 1024</strong></font>
+<font color="0000ff"><strong>#endif</strong></font>
+
+<strong>typedef</strong>	<strong>struct</strong>	<font color="#2040a0">sname_s</font> <font color="4444FF"><strong>{</strong></font>
+    <font color="#2040a0">off_t</font>	<font color="#2040a0">size</font><font color="4444FF">;</font>
+    <strong>char</strong>	<font color="#2040a0">name</font><font color="4444FF">[</font><font color="#2040a0">LEN_CACHED_FILES</font><font color="4444FF">]</font><font color="4444FF">;</font>  <font color="#444444">/* 294912 bytes */</font>
+<font color="4444FF"><strong>}</strong></font> <font color="#2040a0">sname</font><font color="4444FF">;</font>
+
+
+<strong>typedef</strong>	<strong>struct</strong>	<font color="#2040a0">history_s</font> <font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong>			<font color="#2040a0">head</font>, <font color="#2040a0">tail</font><font color="4444FF">;</font>
+    <font color="#2040a0">sname</font>		<font color="#2040a0">list</font><font color="4444FF">[</font><font color="#2040a0">MAX_CACHED_FILES</font><font color="4444FF">]</font><font color="4444FF">;</font>
+    <font color="#2040a0">off_t</font>		<font color="#2040a0">avail</font>, <font color="#2040a0">size</font><font color="4444FF">;</font>
+    <font color="#2040a0">pthread_mutex_t</font>	<font color="#2040a0">mtx</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font> <font color="#2040a0">history</font><font color="4444FF">;</font>
+
+<font color="#2040a0">history</font>		<font color="#2040a0">cache</font><font color="4444FF">;</font>
+<font color="#2040a0">uid_t</font>		<font color="#2040a0">who</font><font color="4444FF">;</font>
+<strong>char</strong>		<font color="#2040a0">cpath</font><font color="4444FF">[</font><font color="#2040a0">MAXPATHLEN</font><font color="4444FF">]</font><font color="4444FF">;</font>
+<strong>char</strong>		<font color="#2040a0">magic</font><font color="4444FF">[</font><font color="#FF0000">2</font><font color="4444FF">]</font><font color="4444FF">;</font>
+<strong>const</strong> <strong>char</strong>    <font color="#2040a0">gzmagic</font><font color="4444FF">[</font><font color="#FF0000">2</font><font color="4444FF">]</font> <font color="4444FF">=</font> <font color="4444FF"><strong>{</strong></font> <font color="#FF0000">31</font>, <font color="#FF0000">139</font> <font color="4444FF"><strong>}</strong></font><font color="4444FF">;</font>
+<strong>const</strong> <strong>struct</strong> <font color="#2040a0">rlimit</font>   <font color="#2040a0">rl</font> <font color="4444FF">=</font> <font color="4444FF"><strong>{</strong></font> <font color="#FF0000">65536</font>, <font color="#FF0000">65536</font> <font color="4444FF"><strong>}</strong></font><font color="4444FF">;</font>	<font color="#444444">/* limit of 65536 open files */</font>
+
+<font color="#444444">/*  FILE *README;  */</font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_getattr</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>struct</strong> <font color="#2040a0">stat</font> <font color="4444FF">*</font><font color="#2040a0">stbuf</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">lstat</font><font color="4444FF">(</font><font color="#2040a0">path</font>, <font color="#2040a0">stbuf</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_fgetattr</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>struct</strong> <font color="#2040a0">stat</font> <font color="4444FF">*</font><font color="#2040a0">stbuf</font>,
+                        <strong>struct</strong> <font color="#2040a0">fuse_file_info</font> <font color="4444FF">*</font><font color="#2040a0">fi</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <font color="4444FF">(</font><strong>void</strong><font color="4444FF">)</font> <font color="#2040a0">path</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">fstat</font><font color="4444FF">(</font><font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">fh</font>, <font color="#2040a0">stbuf</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_access</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>int</strong> <font color="#2040a0">mask</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">access</font><font color="4444FF">(</font><font color="#2040a0">path</font>, <font color="#2040a0">mask</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_readlink</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">buf</font>, <font color="#2040a0">size_t</font> <font color="#2040a0">size</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">readlink</font><font color="4444FF">(</font><font color="#2040a0">path</font>, <font color="#2040a0">buf</font>, <font color="#2040a0">size</font> <font color="4444FF">-</font> <font color="#FF0000">1</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">buf</font><font color="4444FF">[</font><font color="#2040a0">res</font><font color="4444FF">]</font> <font color="4444FF">=</font> <font color="#008000">'<font color="#77dd77">\0</font>'</font><font color="4444FF">;</font>
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_opendir</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>struct</strong> <font color="#2040a0">fuse_file_info</font> <font color="4444FF">*</font><font color="#2040a0">fi</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <font color="#2040a0">DIR</font> <font color="4444FF">*</font><font color="#2040a0">dp</font> <font color="4444FF">=</font> <font color="#2040a0">opendir</font><font color="4444FF">(</font><font color="#2040a0">path</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">dp</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="#2040a0">NULL</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">fh</font> <font color="4444FF">=</font> <font color="4444FF">(</font><strong>unsigned</strong> <strong>long</strong><font color="4444FF">)</font> <font color="#2040a0">dp</font><font color="4444FF">;</font>
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <font color="#2040a0">inline</font> <font color="#2040a0">DIR</font> <font color="4444FF">*</font><font color="#2040a0">get_dirp</font><font color="4444FF">(</font><strong>struct</strong> <font color="#2040a0">fuse_file_info</font> <font color="4444FF">*</font><font color="#2040a0">fi</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>return</strong> <font color="4444FF">(</font><font color="#2040a0">DIR</font> <font color="4444FF">*</font><font color="4444FF">)</font> <font color="4444FF">(</font><font color="#2040a0">uintptr_t</font><font color="4444FF">)</font> <font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">fh</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_readdir</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>void</strong> <font color="4444FF">*</font><font color="#2040a0">buf</font>, <font color="#2040a0">fuse_fill_dir_t</font> <font color="#2040a0">filler</font>,
+                       <font color="#2040a0">off_t</font> <font color="#2040a0">offset</font>, <strong>struct</strong> <font color="#2040a0">fuse_file_info</font> <font color="4444FF">*</font><font color="#2040a0">fi</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <font color="#2040a0">DIR</font> <font color="4444FF">*</font><font color="#2040a0">dp</font> <font color="4444FF">=</font> <font color="#2040a0">get_dirp</font><font color="4444FF">(</font><font color="#2040a0">fi</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>struct</strong> <font color="#2040a0">dirent</font> <font color="4444FF">*</font><font color="#2040a0">de</font><font color="4444FF">;</font>
+
+    <font color="4444FF">(</font><strong>void</strong><font color="4444FF">)</font> <font color="#2040a0">path</font><font color="4444FF">;</font>
+    <font color="#2040a0">seekdir</font><font color="4444FF">(</font><font color="#2040a0">dp</font>, <font color="#2040a0">offset</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>while</strong> <font color="4444FF">(</font><font color="4444FF">(</font><font color="#2040a0">de</font> <font color="4444FF">=</font> <font color="#2040a0">readdir</font><font color="4444FF">(</font><font color="#2040a0">dp</font><font color="4444FF">)</font><font color="4444FF">)</font> <font color="4444FF">!</font><font color="4444FF">=</font> <font color="#2040a0">NULL</font><font color="4444FF">)</font> <font color="4444FF"><strong>{</strong></font>
+        <strong>struct</strong> <font color="#2040a0">stat</font> <font color="#2040a0">st</font><font color="4444FF">;</font>
+        <font color="#2040a0">memset</font><font color="4444FF">(</font><font color="4444FF">&amp;</font><font color="#2040a0">st</font>, <font color="#FF0000">0</font>, <strong>sizeof</strong><font color="4444FF">(</font><font color="#2040a0">st</font><font color="4444FF">)</font><font color="4444FF">)</font><font color="4444FF">;</font>
+        <font color="#2040a0">st</font>.<font color="#2040a0">st_ino</font> <font color="4444FF">=</font> <font color="#2040a0">de</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">d_ino</font><font color="4444FF">;</font>
+        <font color="#2040a0">st</font>.<font color="#2040a0">st_mode</font> <font color="4444FF">=</font> <font color="#2040a0">de</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">d_type</font> <font color="4444FF">&lt;</font><font color="4444FF">&lt;</font> <font color="#FF0000">12</font><font color="4444FF">;</font>
+        <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">filler</font><font color="4444FF">(</font><font color="#2040a0">buf</font>, <font color="#2040a0">de</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">d_name</font>, <font color="4444FF">&amp;</font><font color="#2040a0">st</font>, <font color="#2040a0">telldir</font><font color="4444FF">(</font><font color="#2040a0">dp</font><font color="4444FF">)</font><font color="4444FF">)</font><font color="4444FF">)</font>
+            <strong>break</strong><font color="4444FF">;</font>
+    <font color="4444FF"><strong>}</strong></font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_releasedir</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>struct</strong> <font color="#2040a0">fuse_file_info</font> <font color="4444FF">*</font><font color="#2040a0">fi</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <font color="#2040a0">DIR</font> <font color="4444FF">*</font><font color="#2040a0">dp</font> <font color="4444FF">=</font> <font color="#2040a0">get_dirp</font><font color="4444FF">(</font><font color="#2040a0">fi</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <font color="4444FF">(</font><strong>void</strong><font color="4444FF">)</font> <font color="#2040a0">path</font><font color="4444FF">;</font>
+    <font color="#2040a0">closedir</font><font color="4444FF">(</font><font color="#2040a0">dp</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_mknod</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <font color="#2040a0">mode_t</font> <font color="#2040a0">mode</font>, <font color="#2040a0">dev_t</font> <font color="#2040a0">rdev</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">S_ISFIFO</font><font color="4444FF">(</font><font color="#2040a0">mode</font><font color="4444FF">)</font><font color="4444FF">)</font>
+        <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">mkfifo</font><font color="4444FF">(</font><font color="#2040a0">path</font>, <font color="#2040a0">mode</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>else</strong>
+        <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">mknod</font><font color="4444FF">(</font><font color="#2040a0">path</font>, <font color="#2040a0">mode</font>, <font color="#2040a0">rdev</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_mkdir</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <font color="#2040a0">mode_t</font> <font color="#2040a0">mode</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">mkdir</font><font color="4444FF">(</font><font color="#2040a0">path</font>, <font color="#2040a0">mode</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_unlink</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">unlink</font><font color="4444FF">(</font><font color="#2040a0">path</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_rmdir</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">rmdir</font><font color="4444FF">(</font><font color="#2040a0">path</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_symlink</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">from</font>, <strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">to</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">symlink</font><font color="4444FF">(</font><font color="#2040a0">from</font>, <font color="#2040a0">to</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_rename</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">from</font>, <strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">to</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">rename</font><font color="4444FF">(</font><font color="#2040a0">from</font>, <font color="#2040a0">to</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_link</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">from</font>, <strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">to</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">link</font><font color="4444FF">(</font><font color="#2040a0">from</font>, <font color="#2040a0">to</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_chmod</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <font color="#2040a0">mode_t</font> <font color="#2040a0">mode</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">chmod</font><font color="4444FF">(</font><font color="#2040a0">path</font>, <font color="#2040a0">mode</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_chown</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <font color="#2040a0">uid_t</font> <font color="#2040a0">uid</font>, <font color="#2040a0">gid_t</font> <font color="#2040a0">gid</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">lchown</font><font color="4444FF">(</font><font color="#2040a0">path</font>, <font color="#2040a0">uid</font>, <font color="#2040a0">gid</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_truncate</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <font color="#2040a0">off_t</font> <font color="#2040a0">size</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">truncate</font><font color="4444FF">(</font><font color="#2040a0">path</font>, <font color="#2040a0">size</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_ftruncate</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <font color="#2040a0">off_t</font> <font color="#2040a0">size</font>,
+                         <strong>struct</strong> <font color="#2040a0">fuse_file_info</font> <font color="4444FF">*</font><font color="#2040a0">fi</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <font color="4444FF">(</font><strong>void</strong><font color="4444FF">)</font> <font color="#2040a0">path</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">ftruncate</font><font color="4444FF">(</font><font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">fh</font>, <font color="#2040a0">size</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_utimens</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>const</strong> <strong>struct</strong> <font color="#2040a0">timespec</font> <font color="#2040a0">ts</font><font color="4444FF">[</font><font color="#FF0000">2</font><font color="4444FF">]</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+    <strong>struct</strong> <font color="#2040a0">timeval</font> <font color="#2040a0">tv</font><font color="4444FF">[</font><font color="#FF0000">2</font><font color="4444FF">]</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">tv</font><font color="4444FF">[</font><font color="#FF0000">0</font><font color="4444FF">]</font>.<font color="#2040a0">tv_sec</font> <font color="4444FF">=</font> <font color="#2040a0">ts</font><font color="4444FF">[</font><font color="#FF0000">0</font><font color="4444FF">]</font>.<font color="#2040a0">tv_sec</font><font color="4444FF">;</font>
+    <font color="#2040a0">tv</font><font color="4444FF">[</font><font color="#FF0000">0</font><font color="4444FF">]</font>.<font color="#2040a0">tv_usec</font> <font color="4444FF">=</font> <font color="#2040a0">ts</font><font color="4444FF">[</font><font color="#FF0000">0</font><font color="4444FF">]</font>.<font color="#2040a0">tv_nsec</font> / <font color="#FF0000">1000</font><font color="4444FF">;</font>
+    <font color="#2040a0">tv</font><font color="4444FF">[</font><font color="#FF0000">1</font><font color="4444FF">]</font>.<font color="#2040a0">tv_sec</font> <font color="4444FF">=</font> <font color="#2040a0">ts</font><font color="4444FF">[</font><font color="#FF0000">1</font><font color="4444FF">]</font>.<font color="#2040a0">tv_sec</font><font color="4444FF">;</font>
+    <font color="#2040a0">tv</font><font color="4444FF">[</font><font color="#FF0000">1</font><font color="4444FF">]</font>.<font color="#2040a0">tv_usec</font> <font color="4444FF">=</font> <font color="#2040a0">ts</font><font color="4444FF">[</font><font color="#FF0000">1</font><font color="4444FF">]</font>.<font color="#2040a0">tv_nsec</font> / <font color="#FF0000">1000</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">utimes</font><font color="4444FF">(</font><font color="#2040a0">path</font>, <font color="#2040a0">tv</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_create</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <font color="#2040a0">mode_t</font> <font color="#2040a0">mode</font>, <strong>struct</strong> <font color="#2040a0">fuse_file_info</font> <font color="4444FF">*</font><font color="#2040a0">fi</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">fd</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">fd</font> <font color="4444FF">=</font> <font color="#2040a0">open</font><font color="4444FF">(</font><font color="#2040a0">path</font>, <font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">flags</font>, <font color="#2040a0">mode</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">fd</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">fh</font> <font color="4444FF">=</font> <font color="#2040a0">fd</font><font color="4444FF">;</font>
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+
+<strong>void</strong>    <font color="#2040a0">sniptail</font><font color="4444FF">(</font><strong>void</strong><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <font color="#2040a0">shm_unlink</font><font color="4444FF">(</font>    <font color="#2040a0">cache</font>.<font color="#2040a0">list</font><font color="4444FF">[</font><font color="#2040a0">cache</font>.<font color="#2040a0">tail</font>  <font color="4444FF">]</font>.<font color="#2040a0">name</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <font color="#2040a0">cache</font>.<font color="#2040a0">avail</font> <font color="4444FF">+</font><font color="4444FF">=</font> <font color="#2040a0">cache</font>.<font color="#2040a0">list</font><font color="4444FF">[</font><font color="#2040a0">cache</font>.<font color="#2040a0">tail</font><font color="4444FF">+</font><font color="4444FF">+</font><font color="4444FF">]</font>.<font color="#2040a0">size</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">MAX_CACHED_FILES</font>  <font color="4444FF">=</font><font color="4444FF">=</font>  <font color="#2040a0">cache</font>.<font color="#2040a0">tail</font><font color="4444FF">)</font> <font color="#2040a0">cache</font>.<font color="#2040a0">tail</font> <font color="4444FF">=</font> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+
+<strong>void</strong>	<font color="#2040a0">freespace</font><font color="4444FF">(</font><font color="#2040a0">off_t</font> <font color="#2040a0">amount</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>while</strong> <font color="4444FF">(</font> <font color="4444FF">(</font><font color="#2040a0">amount</font>     <font color="4444FF">&gt;</font>  <font color="#2040a0">cache</font>.<font color="#2040a0">avail</font><font color="4444FF">)</font> <font color="4444FF">&amp;</font><font color="4444FF">&amp;</font>
+            <font color="4444FF">(</font><font color="#2040a0">cache</font>.<font color="#2040a0">head</font> <font color="4444FF">!</font><font color="4444FF">=</font> <font color="#2040a0">cache</font>.<font color="#2040a0">tail</font><font color="4444FF">)</font> <font color="4444FF">)</font> <font color="#2040a0">sniptail</font><font color="4444FF">(</font><font color="4444FF">)</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+
+<strong>void</strong>	<font color="#2040a0">takespace</font><font color="4444FF">(</font><font color="#2040a0">off_t</font> <font color="#2040a0">amount</font>, <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">name</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+                 <font color="#2040a0">cache</font>.<font color="#2040a0">avail</font>                   <font color="4444FF">-</font><font color="4444FF">=</font> <font color="#2040a0">amount</font><font color="4444FF">;</font>
+                 <font color="#2040a0">cache</font>.<font color="#2040a0">list</font><font color="4444FF">[</font><font color="#2040a0">cache</font>.<font color="#2040a0">head</font>  <font color="4444FF">]</font>.<font color="#2040a0">size</font>  <font color="4444FF">=</font> <font color="#2040a0">amount</font><font color="4444FF">;</font>
+         <font color="#2040a0">strncpy</font><font color="4444FF">(</font><font color="#2040a0">cache</font>.<font color="#2040a0">list</font><font color="4444FF">[</font><font color="#2040a0">cache</font>.<font color="#2040a0">head</font><font color="4444FF">+</font><font color="4444FF">+</font><font color="4444FF">]</font>.<font color="#2040a0">name</font>, <font color="#2040a0">name</font>, <font color="#2040a0">LEN_CACHED_FILES</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">MAX_CACHED_FILES</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="#2040a0">cache</font>.<font color="#2040a0">head</font><font color="4444FF">)</font> <font color="#2040a0">cache</font>.<font color="#2040a0">head</font> <font color="4444FF">=</font> <font color="#FF0000">0</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">cache</font>.<font color="#2040a0">tail</font>       <font color="4444FF">=</font><font color="4444FF">=</font> <font color="#2040a0">cache</font>.<font color="#2040a0">head</font><font color="4444FF">)</font> <font color="#2040a0">sniptail</font><font color="4444FF">(</font><font color="4444FF">)</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+
+<strong>int</strong>  <font color="#2040a0">decomp</font><font color="4444FF">(</font><strong>int</strong> <font color="#2040a0">out</font>, <strong>int</strong> <font color="#2040a0">in</font>, <font color="#2040a0">off_t</font> <font color="#2040a0">size</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <font color="#2040a0">z_stream</font>	<font color="#2040a0">z</font><font color="4444FF">;</font>
+    <strong>void</strong>	<font color="4444FF">*</font><font color="#2040a0">ibuf</font>, <font color="4444FF">*</font><font color="#2040a0">obuf</font><font color="4444FF">;</font>
+    <strong>int</strong>		<font color="#2040a0">zerror</font><font color="4444FF">;</font>
+
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">ftruncate</font><font color="4444FF">(</font><font color="#2040a0">out</font>, <font color="#2040a0">size</font><font color="4444FF">)</font>  <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font> <strong>return</strong> <font color="#2040a0">errno</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="4444FF">(</font><font color="#2040a0">obuf</font> <font color="4444FF">=</font> <font color="#2040a0">mmap</font><font color="4444FF">(</font><font color="#2040a0">NULL</font>, <font color="#2040a0">size</font>, <font color="#2040a0">PROT_WRITE</font>, <font color="#2040a0">MAP_SHARED</font>, <font color="#2040a0">out</font>, <font color="#FF0000">0</font><font color="4444FF">)</font><font color="4444FF">)</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="#2040a0">MAP_FAILED</font><font color="4444FF">)</font> <strong>return</strong> <font color="#2040a0">errno</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="4444FF">(</font><font color="#2040a0">ibuf</font> <font color="4444FF">=</font> <font color="#2040a0">mmap</font><font color="4444FF">(</font><font color="#2040a0">NULL</font>, <font color="#2040a0">size</font>, <font color="#2040a0">PROT_READ</font>,  <font color="#2040a0">MAP_SHARED</font>, <font color="#2040a0">in</font>,  <font color="#FF0000">0</font><font color="4444FF">)</font><font color="4444FF">)</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="#2040a0">MAP_FAILED</font><font color="4444FF">)</font>  <font color="4444FF"><strong>{</strong></font> <font color="#2040a0">zerror</font> <font color="4444FF">=</font> <font color="#2040a0">errno</font><font color="4444FF">;</font> <font color="#2040a0">munmap</font><font color="4444FF">(</font><font color="#2040a0">obuf</font>, <font color="#2040a0">size</font><font color="4444FF">)</font><font color="4444FF">;</font> <strong>return</strong> <font color="#2040a0">zerror</font><font color="4444FF">;</font> <font color="4444FF"><strong>}</strong></font>
+
+    <font color="#2040a0">z</font>.<font color="#2040a0">zalloc</font>    <font color="4444FF">=</font> <font color="#2040a0">Z_NULL</font><font color="4444FF">;</font>
+    <font color="#2040a0">z</font>.<font color="#2040a0">zfree</font>     <font color="4444FF">=</font> <font color="#2040a0">Z_NULL</font><font color="4444FF">;</font>
+    <font color="#2040a0">z</font>.<font color="#2040a0">opaque</font>    <font color="4444FF">=</font> <font color="#2040a0">Z_NULL</font><font color="4444FF">;</font>
+    <font color="#2040a0">z</font>.<font color="#2040a0">next_in</font>   <font color="4444FF">=</font> <font color="#2040a0">ibuf</font><font color="4444FF">;</font>
+    <font color="#2040a0">z</font>.<font color="#2040a0">next_out</font>  <font color="4444FF">=</font> <font color="#2040a0">obuf</font><font color="4444FF">;</font>
+    <font color="#2040a0">z</font>.<font color="#2040a0">avail_out</font> <font color="4444FF">=</font> \
+    <font color="#2040a0">z</font>.<font color="#2040a0">avail_in</font>  <font color="4444FF">=</font> <font color="#2040a0">size</font><font color="4444FF">;</font>
+    <font color="#2040a0">zerror</font>      <font color="4444FF">=</font> <font color="#2040a0">inflateInit2</font><font color="4444FF">(</font><font color="4444FF">&amp;</font><font color="#2040a0">z</font>, <font color="#FF0000">31</font><font color="4444FF">)</font><font color="4444FF">;</font>
+
+    <strong>if</strong> <font color="4444FF">(</font> <font color="#2040a0">zerror</font> <font color="4444FF">!</font><font color="4444FF">=</font> <font color="#2040a0">Z_OK</font> <font color="4444FF">)</font> <font color="4444FF"><strong>{</strong></font>
+        <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">zerror</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="#2040a0">Z_ERRNO</font><font color="4444FF">)</font> <font color="#2040a0">zerror</font> <font color="4444FF">=</font> <font color="#2040a0">errno</font><font color="4444FF">;</font> <strong>else</strong> <font color="#2040a0">zerror</font> <font color="4444FF">=</font> <font color="#2040a0">EIO</font><font color="4444FF">;</font>
+        <font color="#2040a0">munmap</font><font color="4444FF">(</font><font color="#2040a0">ibuf</font>, <font color="#2040a0">size</font><font color="4444FF">)</font><font color="4444FF">;</font>
+        <font color="#2040a0">munmap</font><font color="4444FF">(</font><font color="#2040a0">obuf</font>, <font color="#2040a0">size</font><font color="4444FF">)</font><font color="4444FF">;</font>
+        <strong>return</strong> <font color="#2040a0">zerror</font><font color="4444FF">;</font>
+    <font color="4444FF"><strong>}</strong></font>
+
+    <font color="#2040a0">zerror</font>      <font color="4444FF">=</font> <font color="#2040a0">inflate</font><font color="4444FF">(</font><font color="4444FF">&amp;</font><font color="#2040a0">z</font>, <font color="#2040a0">Z_FINISH</font><font color="4444FF">)</font><font color="4444FF">;</font>
+                  <font color="#2040a0">inflateEnd</font><font color="4444FF">(</font><font color="4444FF">&amp;</font><font color="#2040a0">z</font><font color="4444FF">)</font><font color="4444FF">;</font>
+
+                                <font color="#2040a0">munmap</font><font color="4444FF">(</font><font color="#2040a0">ibuf</font>, <font color="#2040a0">size</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <font color="#2040a0">msync</font><font color="4444FF">(</font><font color="#2040a0">obuf</font>, <font color="#2040a0">size</font>, <font color="#2040a0">MS_SYNC</font><font color="4444FF">)</font><font color="4444FF">;</font> <font color="#2040a0">munmap</font><font color="4444FF">(</font><font color="#2040a0">obuf</font>, <font color="#2040a0">size</font><font color="4444FF">)</font><font color="4444FF">;</font>
+
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">zerror</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="#2040a0">Z_STREAM_END</font><font color="4444FF">)</font> <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>     <strong>else</strong>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">zerror</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="#2040a0">Z_ERRNO</font><font color="4444FF">)</font>      <strong>return</strong> <font color="#2040a0">errno</font><font color="4444FF">;</font> <strong>else</strong>
+                                <strong>return</strong> <font color="#2040a0">EIO</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_open</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>struct</strong> <font color="#2040a0">fuse_file_info</font> <font color="4444FF">*</font><font color="#2040a0">fi</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong>			<font color="#2040a0">fd</font>, <font color="#2040a0">fdn</font>, <font color="#2040a0">ouch</font><font color="4444FF">;</font>
+    <strong>struct</strong> <font color="#2040a0">stat</font>		<font color="#2040a0">sbuf</font><font color="4444FF">;</font>
+
+    <strong>if</strong> <font color="4444FF">(</font> <font color="4444FF">(</font><font color="#2040a0">fd</font> <font color="4444FF">=</font> <font color="#2040a0">open</font><font color="4444FF">(</font><font color="#2040a0">path</font>, <font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">flags</font><font color="4444FF">)</font><font color="4444FF">)</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font> <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+<font color="#444444">/*
+    The original conditional was split into two parts to make it faster.
+
+    true if writing
+    true if failure to lstat
+    true if writeable
+    true if failure to read
+    true if failure to rewind
+    true if magic not gzip
+
+    If no conditions are true it is a reduced file.
+*/</font>
+
+    <strong>if</strong> <font color="4444FF">(</font> <font color="4444FF">!</font> <font color="4444FF">(</font> <font color="4444FF">(</font> <font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">flags</font> <font color="4444FF">&amp;</font> <font color="4444FF">(</font><font color="#2040a0">O_WRONLY</font> <font color="4444FF">|</font> <font color="#2040a0">O_RDWR</font><font color="4444FF">)</font>                <font color="4444FF">)</font> <font color="4444FF">|</font><font color="4444FF">|</font>
+             <font color="4444FF">(</font> <font color="#2040a0">lstat</font><font color="4444FF">(</font><font color="#2040a0">path</font>, <font color="4444FF">&amp;</font><font color="#2040a0">sbuf</font><font color="4444FF">)</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font>                       <font color="4444FF">)</font> <font color="4444FF">|</font><font color="4444FF">|</font>
+             <font color="4444FF">(</font> <font color="#2040a0">sbuf</font>.<font color="#2040a0">st_mode</font> <font color="4444FF">&amp;</font> <font color="4444FF">(</font> <font color="#2040a0">S_IWUSR</font> <font color="4444FF">|</font> <font color="#2040a0">S_IWGRP</font> <font color="4444FF">|</font> <font color="#2040a0">S_IWOTH</font> <font color="4444FF">)</font> <font color="4444FF">)</font> <font color="4444FF">|</font><font color="4444FF">|</font>
+             <font color="4444FF">(</font> <font color="#2040a0">sbuf</font>.<font color="#2040a0">st_size</font> <font color="4444FF">&lt;</font> <font color="#FF0000">30</font>                              <font color="4444FF">)</font>
+           <font color="4444FF">)</font>
+       <font color="4444FF">)</font> <font color="4444FF"><strong>{</strong></font>
+
+        <font color="#444444">/* Probably a reduced file, is it cached? */</font>
+
+        <font color="#2040a0">pthread_mutex_lock</font><font color="4444FF">(</font><font color="4444FF">&amp;</font><font color="#2040a0">cache</font>.<font color="#2040a0">mtx</font><font color="4444FF">)</font><font color="4444FF">;</font>
+
+        <font color="#2040a0">snprintf</font><font color="4444FF">(</font><font color="#2040a0">cpath</font>, <font color="#2040a0">MAXPATHLEN</font>, <font color="#008000">&quot;/.%li.%li.%li.%li.%li.fguz&quot;</font>, \
+                 <font color="4444FF">(</font> <strong>long</strong> <strong>int</strong> <font color="4444FF">)</font> <font color="#2040a0">sbuf</font>.<font color="#2040a0">st_size</font>,  \
+                 <font color="4444FF">(</font> <strong>long</strong> <strong>int</strong> <font color="4444FF">)</font> <font color="#2040a0">sbuf</font>.<font color="#2040a0">st_ctime</font>, \
+                 <font color="4444FF">(</font> <strong>long</strong> <strong>int</strong> <font color="4444FF">)</font> <font color="#2040a0">sbuf</font>.<font color="#2040a0">st_ino</font>,   \
+                 <font color="4444FF">(</font> <strong>long</strong> <strong>int</strong> <font color="4444FF">)</font> <font color="#2040a0">sbuf</font>.<font color="#2040a0">st_dev</font>,   \
+                 <font color="4444FF">(</font> <strong>long</strong> <strong>int</strong> <font color="4444FF">)</font> <font color="#2040a0">who</font><font color="4444FF">)</font><font color="4444FF">;</font>
+
+        <strong>if</strong> <font color="4444FF">(</font> <font color="4444FF">(</font><font color="#2040a0">fdn</font> <font color="4444FF">=</font> <font color="#2040a0">shm_open</font><font color="4444FF">(</font><font color="#2040a0">cpath</font>, <font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">flags</font>, <font color="#2040a0">S_IRUSR</font><font color="4444FF">)</font><font color="4444FF">)</font> <font color="4444FF">!</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font> <font color="4444FF"><strong>{</strong></font>
+            <font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">fh</font> <font color="4444FF">=</font> <font color="#2040a0">fdn</font><font color="4444FF">;</font>
+            <font color="#2040a0">close</font><font color="4444FF">(</font><font color="#2040a0">fd</font><font color="4444FF">)</font><font color="4444FF">;</font>
+            <font color="#2040a0">pthread_mutex_unlock</font><font color="4444FF">(</font><font color="4444FF">&amp;</font><font color="#2040a0">cache</font>.<font color="#2040a0">mtx</font><font color="4444FF">)</font><font color="4444FF">;</font>
+            <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+        <font color="4444FF"><strong>}</strong></font>  <strong>else</strong>
+        <strong>if</strong> <font color="4444FF">(</font> <font color="4444FF">!</font> <font color="4444FF">(</font> <font color="4444FF">(</font>  <font color="#2040a0">read</font><font color="4444FF">(</font> <font color="#2040a0">fd</font>, <font color="#2040a0">magic</font>, <font color="#FF0000">2</font>        <font color="4444FF">)</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font>  <font color="4444FF">)</font> <font color="4444FF">|</font><font color="4444FF">|</font>
+                 <font color="4444FF">(</font> <font color="#2040a0">lseek</font><font color="4444FF">(</font> <font color="#2040a0">fd</font>, <font color="#FF0000">0</font>,     <font color="#2040a0">SEEK_SET</font> <font color="4444FF">)</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font>  <font color="4444FF">)</font> <font color="4444FF">|</font><font color="4444FF">|</font>
+                 <font color="4444FF">(</font> <font color="4444FF">*</font> <font color="4444FF">(</font> <font color="#2040a0">uint16_t</font> <font color="4444FF">*</font> <font color="4444FF">)</font>   <font color="#2040a0">magic</font>     <font color="4444FF">!</font><font color="4444FF">=</font> \
+                   <font color="4444FF">*</font> <font color="4444FF">(</font> <font color="#2040a0">uint16_t</font> <font color="4444FF">*</font> <font color="4444FF">)</font> <font color="#2040a0">gzmagic</font> <font color="4444FF">)</font> <font color="4444FF">)</font>
+           <font color="4444FF">)</font> <font color="4444FF"><strong>{</strong></font>
+            <font color="#444444">/* Definitely an uncached reduced file */</font>
+            <font color="#2040a0">freespace</font><font color="4444FF">(</font><font color="#2040a0">sbuf</font>.<font color="#2040a0">st_size</font><font color="4444FF">)</font><font color="4444FF">;</font>
+            <strong>if</strong> <font color="4444FF">(</font><font color="4444FF">(</font><font color="#2040a0">fdn</font> <font color="4444FF">=</font> <font color="#2040a0">shm_open</font><font color="4444FF">(</font><font color="#2040a0">cpath</font>, <font color="#2040a0">O_RDWR</font> <font color="4444FF">|</font> <font color="#2040a0">O_CREAT</font> <font color="4444FF">|</font> <font color="#2040a0">O_EXCL</font>, <font color="#2040a0">S_IRUSR</font> <font color="4444FF">|</font> <font color="#2040a0">S_IWUSR</font><font color="4444FF">)</font><font color="4444FF">)</font> <font color="4444FF">!</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font> <font color="4444FF"><strong>{</strong></font>
+                <strong>if</strong> <font color="4444FF">(</font><font color="4444FF">(</font><font color="#2040a0">ouch</font> <font color="4444FF">=</font> <font color="#2040a0">decomp</font><font color="4444FF">(</font><font color="#2040a0">fdn</font>, <font color="#2040a0">fd</font>, <font color="#2040a0">sbuf</font>.<font color="#2040a0">st_size</font><font color="4444FF">)</font><font color="4444FF">)</font> <font color="4444FF">!</font><font color="4444FF">=</font> <font color="#FF0000">0</font><font color="4444FF">)</font> <font color="4444FF"><strong>{</strong></font>
+                    <font color="#2040a0">close</font><font color="4444FF">(</font><font color="#2040a0">fdn</font><font color="4444FF">)</font><font color="4444FF">;</font> <font color="#2040a0">close</font><font color="4444FF">(</font><font color="#2040a0">fd</font><font color="4444FF">)</font><font color="4444FF">;</font>
+                    <font color="#2040a0">shm_unlink</font><font color="4444FF">(</font><font color="#2040a0">cpath</font><font color="4444FF">)</font><font color="4444FF">;</font>
+                    <font color="#2040a0">pthread_mutex_unlock</font><font color="4444FF">(</font><font color="4444FF">&amp;</font><font color="#2040a0">cache</font>.<font color="#2040a0">mtx</font><font color="4444FF">)</font><font color="4444FF">;</font>
+                    <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">ouch</font><font color="4444FF">;</font>
+                <font color="4444FF"><strong>}</strong></font>
+                <font color="#2040a0">close</font><font color="4444FF">(</font><font color="#2040a0">fdn</font><font color="4444FF">)</font><font color="4444FF">;</font> <font color="#2040a0">close</font><font color="4444FF">(</font><font color="#2040a0">fd</font><font color="4444FF">)</font><font color="4444FF">;</font>
+                <font color="#2040a0">takespace</font><font color="4444FF">(</font><font color="#2040a0">sbuf</font>.<font color="#2040a0">st_size</font>, <font color="#2040a0">cpath</font><font color="4444FF">)</font><font color="4444FF">;</font>
+                <strong>if</strong> <font color="4444FF">(</font> <font color="4444FF">(</font><font color="#2040a0">fd</font> <font color="4444FF">=</font> <font color="#2040a0">shm_open</font><font color="4444FF">(</font><font color="#2040a0">cpath</font>, <font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">flags</font>, <font color="#2040a0">S_IRUSR</font><font color="4444FF">)</font><font color="4444FF">)</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font> <font color="4444FF"><strong>{</strong></font>
+                    <font color="#2040a0">pthread_mutex_unlock</font><font color="4444FF">(</font><font color="4444FF">&amp;</font><font color="#2040a0">cache</font>.<font color="#2040a0">mtx</font><font color="4444FF">)</font><font color="4444FF">;</font>
+                    <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+                <font color="4444FF"><strong>}</strong></font>
+            <font color="4444FF"><strong>}</strong></font> <strong>else</strong> <font color="4444FF"><strong>{</strong></font>
+                <font color="#2040a0">ouch</font> <font color="4444FF">=</font> <font color="#2040a0">errno</font><font color="4444FF">;</font>
+                <font color="#2040a0">close</font><font color="4444FF">(</font><font color="#2040a0">fd</font><font color="4444FF">)</font><font color="4444FF">;</font>
+                <font color="#2040a0">pthread_mutex_unlock</font><font color="4444FF">(</font><font color="4444FF">&amp;</font><font color="#2040a0">cache</font>.<font color="#2040a0">mtx</font><font color="4444FF">)</font><font color="4444FF">;</font>
+                <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">ouch</font><font color="4444FF">;</font>
+            <font color="4444FF"><strong>}</strong></font>
+        <font color="4444FF"><strong>}</strong></font>
+        <font color="#2040a0">pthread_mutex_unlock</font><font color="4444FF">(</font><font color="4444FF">&amp;</font><font color="#2040a0">cache</font>.<font color="#2040a0">mtx</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <font color="4444FF"><strong>}</strong></font>
+    <font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">fh</font> <font color="4444FF">=</font> <font color="#2040a0">fd</font><font color="4444FF">;</font>
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_read</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">buf</font>, <font color="#2040a0">size_t</font> <font color="#2040a0">size</font>, <font color="#2040a0">off_t</font> <font color="#2040a0">offset</font>,
+                    <strong>struct</strong> <font color="#2040a0">fuse_file_info</font> <font color="4444FF">*</font><font color="#2040a0">fi</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <font color="4444FF">(</font><strong>void</strong><font color="4444FF">)</font> <font color="#2040a0">path</font><font color="4444FF">;</font>
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">pread</font><font color="4444FF">(</font><font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">fh</font>, <font color="#2040a0">buf</font>, <font color="#2040a0">size</font>, <font color="#2040a0">offset</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_write</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">buf</font>, <font color="#2040a0">size_t</font> <font color="#2040a0">size</font>,
+                     <font color="#2040a0">off_t</font> <font color="#2040a0">offset</font>, <strong>struct</strong> <font color="#2040a0">fuse_file_info</font> <font color="4444FF">*</font><font color="#2040a0">fi</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <font color="4444FF">(</font><strong>void</strong><font color="4444FF">)</font> <font color="#2040a0">path</font><font color="4444FF">;</font>
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">pwrite</font><font color="4444FF">(</font><font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">fh</font>, <font color="#2040a0">buf</font>, <font color="#2040a0">size</font>, <font color="#2040a0">offset</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_statfs</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>struct</strong> <font color="#2040a0">statvfs</font> <font color="4444FF">*</font><font color="#2040a0">stbuf</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">statvfs</font><font color="4444FF">(</font><font color="#2040a0">path</font>, <font color="#2040a0">stbuf</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_flush</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>struct</strong> <font color="#2040a0">fuse_file_info</font> <font color="4444FF">*</font><font color="#2040a0">fi</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+
+    <font color="4444FF">(</font><strong>void</strong><font color="4444FF">)</font> <font color="#2040a0">path</font><font color="4444FF">;</font>
+    <font color="#444444">/* This is called from every close on an open file, so call the
+       close on the underlying filesystem.  But since flush may be
+       called multiple times for an open file, this must not really
+       close the file.  This is important if used on a network
+       filesystem like NFS which flush the data/metadata on close() */</font>
+    <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">close</font><font color="4444FF">(</font><font color="#2040a0">dup</font><font color="4444FF">(</font><font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">fh</font><font color="4444FF">)</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_release</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>struct</strong> <font color="#2040a0">fuse_file_info</font> <font color="4444FF">*</font><font color="#2040a0">fi</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <font color="4444FF">(</font><strong>void</strong><font color="4444FF">)</font> <font color="#2040a0">path</font><font color="4444FF">;</font>
+    <font color="#2040a0">close</font><font color="4444FF">(</font><font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">fh</font><font color="4444FF">)</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_fsync</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>int</strong> <font color="#2040a0">isdatasync</font>,
+                     <strong>struct</strong> <font color="#2040a0">fuse_file_info</font> <font color="4444FF">*</font><font color="#2040a0">fi</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+    <font color="4444FF">(</font><strong>void</strong><font color="4444FF">)</font> <font color="#2040a0">path</font><font color="4444FF">;</font>
+
+<font color="0000ff"><strong>#ifndef HAVE_FDATASYNC</strong></font>
+    <font color="4444FF">(</font><strong>void</strong><font color="4444FF">)</font> <font color="#2040a0">isdatasync</font><font color="4444FF">;</font>
+<font color="0000ff"><strong>#else</strong></font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">isdatasync</font><font color="4444FF">)</font>
+        <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">fdatasync</font><font color="4444FF">(</font><font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">fh</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>else</strong>
+<font color="0000ff"><strong>#endif</strong></font>
+        <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">fsync</font><font color="4444FF">(</font><font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">fh</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<font color="0000ff"><strong>#ifdef HAVE_SETXATTR</strong></font>
+<font color="#444444">/* xattr operations are optional and can safely be left unimplemented */</font>
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_setxattr</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">name</font>, <strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">value</font>,
+                        <font color="#2040a0">size_t</font> <font color="#2040a0">size</font>, <strong>int</strong> <font color="#2040a0">flags</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">lsetxattr</font><font color="4444FF">(</font><font color="#2040a0">path</font>, <font color="#2040a0">name</font>, <font color="#2040a0">value</font>, <font color="#2040a0">size</font>, <font color="#2040a0">flags</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_getxattr</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">name</font>, <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">value</font>,
+                    <font color="#2040a0">size_t</font> <font color="#2040a0">size</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">lgetxattr</font><font color="4444FF">(</font><font color="#2040a0">path</font>, <font color="#2040a0">name</font>, <font color="#2040a0">value</font>, <font color="#2040a0">size</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+    <strong>return</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_listxattr</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">list</font>, <font color="#2040a0">size_t</font> <font color="#2040a0">size</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">llistxattr</font><font color="4444FF">(</font><font color="#2040a0">path</font>, <font color="#2040a0">list</font>, <font color="#2040a0">size</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+    <strong>return</strong> <font color="#2040a0">res</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_removexattr</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">name</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>int</strong> <font color="#2040a0">res</font> <font color="4444FF">=</font> <font color="#2040a0">lremovexattr</font><font color="4444FF">(</font><font color="#2040a0">path</font>, <font color="#2040a0">name</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">res</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <strong>return</strong> <font color="4444FF">-</font><font color="#2040a0">errno</font><font color="4444FF">;</font>
+    <strong>return</strong> <font color="#FF0000">0</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+<font color="0000ff"><strong>#endif<font color="#444444"> /* HAVE_SETXATTR */</font></strong></font>
+
+<strong>static</strong> <strong>int</strong> <font color="#2040a0">xmp_lock</font><font color="4444FF">(</font><strong>const</strong> <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">path</font>, <strong>struct</strong> <font color="#2040a0">fuse_file_info</font> <font color="4444FF">*</font><font color="#2040a0">fi</font>, <strong>int</strong> <font color="#2040a0">cmd</font>,
+                    <strong>struct</strong> <font color="#2040a0">flock</font> <font color="4444FF">*</font><font color="#2040a0">lock</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <font color="4444FF">(</font><strong>void</strong><font color="4444FF">)</font> <font color="#2040a0">path</font><font color="4444FF">;</font>
+
+    <strong>return</strong> <font color="#2040a0">ulockmgr_op</font><font color="4444FF">(</font><font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">fh</font>, <font color="#2040a0">cmd</font>, <font color="#2040a0">lock</font>, <font color="4444FF">&amp;</font><font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">lock_owner</font>,
+                       <strong>sizeof</strong><font color="4444FF">(</font><font color="#2040a0">fi</font><font color="4444FF">-</font><font color="4444FF">&gt;</font><font color="#2040a0">lock_owner</font><font color="4444FF">)</font><font color="4444FF">)</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+<strong>static</strong> <strong>struct</strong> <font color="#2040a0">fuse_operations</font> <font color="#2040a0">xmp_oper</font> <font color="4444FF">=</font> <font color="4444FF"><strong>{</strong></font>
+    .<font color="#2040a0">getattr</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_getattr</font>,
+    .<font color="#2040a0">fgetattr</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_fgetattr</font>,
+    .<font color="#2040a0">access</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_access</font>,
+    .<font color="#2040a0">readlink</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_readlink</font>,
+    .<font color="#2040a0">opendir</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_opendir</font>,
+    .<font color="#2040a0">readdir</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_readdir</font>,
+    .<font color="#2040a0">releasedir</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_releasedir</font>,
+    .<font color="#2040a0">mknod</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_mknod</font>,
+    .<font color="#2040a0">mkdir</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_mkdir</font>,
+    .<font color="#2040a0">symlink</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_symlink</font>,
+    .<font color="#2040a0">unlink</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_unlink</font>,
+    .<font color="#2040a0">rmdir</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_rmdir</font>,
+    .<font color="#2040a0">rename</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_rename</font>,
+    .<font color="#2040a0">link</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_link</font>,
+    .<font color="#2040a0">chmod</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_chmod</font>,
+    .<font color="#2040a0">chown</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_chown</font>,
+    .<font color="#2040a0">truncate</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_truncate</font>,
+    .<font color="#2040a0">ftruncate</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_ftruncate</font>,
+    .<font color="#2040a0">utimens</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_utimens</font>,
+    .<font color="#2040a0">create</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_create</font>,
+    .<font color="#2040a0">open</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_open</font>,
+    .<font color="#2040a0">read</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_read</font>,
+    .<font color="#2040a0">write</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_write</font>,
+    .<font color="#2040a0">statfs</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_statfs</font>,
+    .<font color="#2040a0">flush</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_flush</font>,
+    .<font color="#2040a0">release</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_release</font>,
+    .<font color="#2040a0">fsync</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_fsync</font>,
+<font color="0000ff"><strong>#ifdef HAVE_SETXATTR</strong></font>
+    .<font color="#2040a0">setxattr</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_setxattr</font>,
+    .<font color="#2040a0">getxattr</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_getxattr</font>,
+    .<font color="#2040a0">listxattr</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_listxattr</font>,
+    .<font color="#2040a0">removexattr</font><font color="4444FF">=</font> <font color="#2040a0">xmp_removexattr</font>,
+<font color="0000ff"><strong>#endif</strong></font>
+    .<font color="#2040a0">lock</font>	<font color="4444FF">=</font> <font color="#2040a0">xmp_lock</font>,
+<font color="4444FF"><strong>}</strong></font><font color="4444FF">;</font>
+
+<strong>int</strong> <font color="#2040a0">main</font><font color="4444FF">(</font><strong>int</strong> <font color="#2040a0">argc</font>, <strong>char</strong> <font color="4444FF">*</font><font color="#2040a0">argv</font><font color="4444FF">[</font><font color="4444FF">]</font><font color="4444FF">)</font>
+<font color="4444FF"><strong>{</strong></font>
+    <strong>char</strong>	<font color="#2040a0">onfile</font><font color="4444FF">[</font><font color="#2040a0">MAXPATHLEN</font><font color="4444FF">]</font><font color="4444FF">;</font>
+    <strong>int</strong>		<font color="#2040a0">onfd</font><font color="4444FF">;</font>
+
+<font color="#444444">/*  README=fopen(&quot;/tmp/read.me&quot;,&quot;w&quot;);  */</font>
+
+    <font color="#2040a0">setrlimit</font><font color="4444FF">(</font><font color="#2040a0">RLIMIT_NOFILE</font>, <font color="4444FF">&amp;</font><font color="#2040a0">rl</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <font color="#2040a0">who</font> <font color="4444FF">=</font> <font color="#2040a0">getuid</font><font color="4444FF">(</font><font color="4444FF">)</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">sprintf</font><font color="4444FF">(</font><font color="#2040a0">onfile</font>,<font color="#008000">&quot;/.fuse.gunzip.%lli&quot;</font>, <font color="4444FF">(</font><strong>long</strong> <strong>long</strong> <strong>int</strong><font color="4444FF">)</font> <font color="#2040a0">getpid</font><font color="4444FF">(</font><font color="4444FF">)</font><font color="4444FF">)</font><font color="4444FF">;</font>
+
+    <strong>if</strong> <font color="4444FF">(</font><font color="4444FF">(</font><font color="#2040a0">onfd</font> <font color="4444FF">=</font> <font color="#2040a0">shm_open</font><font color="4444FF">(</font><font color="#2040a0">onfile</font>, <font color="#2040a0">O_RDWR</font> <font color="4444FF">|</font> <font color="#2040a0">O_CREAT</font>, <font color="#2040a0">S_IRUSR</font> <font color="4444FF">|</font> <font color="#2040a0">S_IWUSR</font><font color="4444FF">)</font><font color="4444FF">)</font> <font color="4444FF">!</font><font color="4444FF">=</font> <font color="4444FF">-</font><font color="#FF0000">1</font><font color="4444FF">)</font>
+        <font color="#2040a0">close</font><font color="4444FF">(</font><font color="#2040a0">onfd</font><font color="4444FF">)</font><font color="4444FF">;</font> <strong>else</strong>
+        <font color="#2040a0">err</font><font color="4444FF">(</font><font color="#FF0000">1</font>, <font color="#008000">&quot;POSIX shared memory required.<font color="#77dd77">\n</font># mkdir -p /dev/shm<font color="#77dd77">\n</font># mount -t tmpfs none /dev/shm&quot;</font><font color="4444FF">)</font><font color="4444FF">;</font>
+
+    <strong>if</strong> <font color="4444FF">(</font><font color="#2040a0">getenv</font><font color="4444FF">(</font><font color="#008000">&quot;FUSE_GUNZIP_SIZE&quot;</font><font color="4444FF">)</font> <font color="4444FF">=</font><font color="4444FF">=</font> <font color="#2040a0">NULL</font><font color="4444FF">)</font>
+           <font color="#2040a0">cache</font>.<font color="#2040a0">size</font>  <font color="4444FF">=</font>  <font color="#2040a0">DEFAULT_CACHE_SIZE</font><font color="4444FF">;</font> <strong>else</strong>
+    <strong>if</strong> <font color="4444FF">(</font> <font color="4444FF">(</font><font color="#2040a0">sscanf</font><font color="4444FF">(</font><font color="#2040a0">getenv</font><font color="4444FF">(</font><font color="#008000">&quot;FUSE_GUNZIP_SIZE&quot;</font><font color="4444FF">)</font>, <font color="#008000">&quot;%lli&quot;</font>, <font color="4444FF">&amp;</font><font color="#2040a0">cache</font>.<font color="#2040a0">size</font><font color="4444FF">)</font> <font color="4444FF">!</font><font color="4444FF">=</font> <font color="#FF0000">1</font><font color="4444FF">)</font> <font color="4444FF">|</font><font color="4444FF">|</font>
+         <font color="4444FF">(</font> <font color="#2040a0">cache</font>.<font color="#2040a0">size</font>  <font color="4444FF">&lt;</font>    <font color="#FF0000">16</font> <font color="4444FF">*</font> <font color="#FF0000">1024</font> <font color="4444FF">*</font> <font color="#FF0000">1024</font> <font color="4444FF">)</font> <font color="4444FF">|</font><font color="4444FF">|</font>
+         <font color="4444FF">(</font> <font color="#2040a0">cache</font>.<font color="#2040a0">size</font>  <font color="4444FF">&gt;</font>  <font color="#FF0000">1024</font> <font color="4444FF">*</font> <font color="#FF0000">1024</font> <font color="4444FF">*</font> <font color="#FF0000">1024</font> <font color="4444FF">)</font> <font color="4444FF">)</font>
+           <font color="#2040a0">cache</font>.<font color="#2040a0">size</font>  <font color="4444FF">=</font>  <font color="#2040a0">DEFAULT_CACHE_SIZE</font><font color="4444FF">;</font>
+    <font color="#444444">/* 1G &gt; reasonable cache size &gt; 16M */</font>
+
+    <font color="#2040a0">cache</font>.<font color="#2040a0">avail</font> <font color="4444FF">=</font> <font color="#2040a0">cache</font>.<font color="#2040a0">size</font><font color="4444FF">;</font>
+    <font color="#2040a0">cache</font>.<font color="#2040a0">head</font>  <font color="4444FF">=</font> <font color="#2040a0">cache</font>.<font color="#2040a0">tail</font> <font color="4444FF">=</font> <font color="#FF0000">0</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">pthread_mutex_init</font><font color="4444FF">(</font><font color="4444FF">&amp;</font><font color="#2040a0">cache</font>.<font color="#2040a0">mtx</font>, <font color="#2040a0">NULL</font><font color="4444FF">)</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">umask</font><font color="4444FF">(</font><font color="#FF0000">0</font><font color="4444FF">)</font><font color="4444FF">;</font>
+<font color="#444444">/*    return fuse_main(argc, argv, &amp;xmp_oper, NULL); */</font>
+    <font color="#2040a0">onfd</font> <font color="4444FF">=</font> <font color="#2040a0">fuse_main</font><font color="4444FF">(</font><font color="#2040a0">argc</font>, <font color="#2040a0">argv</font>, <font color="4444FF">&amp;</font><font color="#2040a0">xmp_oper</font>, <font color="#2040a0">NULL</font><font color="4444FF">)</font><font color="4444FF">;</font>
+
+    <font color="#2040a0">freespace</font><font color="4444FF">(</font><font color="#2040a0">cache</font>.<font color="#2040a0">size</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <font color="#2040a0">shm_unlink</font><font color="4444FF">(</font><font color="#2040a0">onfile</font><font color="4444FF">)</font><font color="4444FF">;</font>
+    <strong>return</strong> <font color="#2040a0">onfd</font><font color="4444FF">;</font>
+<font color="4444FF"><strong>}</strong></font>
+
+</pre>
+<hr>
+syntax highlighted by <a href="http://www.palfrader.org/code2html">Code2HTML</a>, v. 0.9.1
+</body>
+</html>

@@ -1,0 +1,8 @@
+Kyle Sallee <kyle.sallee@gmail.com>
+Miklos Szeredi <miklos@szeredi.hu>
+
+Miklos Szeredi created the example program for fuse.
+Kyle Sallee modified the example program to create fuse.gunzip
+Kyle Sallee created the reduce program.
+
+Please address questions about fuse.gunzip to Kyle Sallee.

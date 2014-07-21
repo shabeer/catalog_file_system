@@ -1,0 +1,172 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html><head>
+
+
+  <meta http-equiv="content-type" content="text/html; charset=ISO-8859-1"><title>FUSE: Filesystem in Userspace</title></head><body>
+<table style="text-align: left; width: 100%;" border="0" cellpadding="2" cellspacing="10">
+  <tbody>
+    <tr>
+      <td style="text-align: center; vertical-align: middle; width: 15%;"><img style="width: 146px; height: 72px;" alt="FUSE" src="FUSE:%20Filesystem%20in%20Userspace_files/fuse.png"><br>
+      </td>
+      <td style="text-align: center; vertical-align: middle;"><big><big><big><big>Filesystem
+in Userspace</big></big></big></big><br>
+      </td>
+    </tr>
+    <tr>
+      <td style="vertical-align: top; width: 15%; background-color: rgb(255, 255, 204);">
+      <a href="http://sourceforge.net/project/showfiles.php?group_id=121684&amp;package_id=132802">Download stable release</a><br>
+      <br>
+      <a href="http://sourceforge.net/project/showfiles.php?group_id=121684&amp;package_id=140422">Download pre-release</a><br>
+      <br>
+      <a href="http://fuse.sourceforge.net/doxygen/index.html">API reference (experimental)</a><br>
+      <br>
+      <a href="http://sourceforge.net/mailarchive/forum.php?forum_name=fuse-devel">Mailing
+list archives on SourceForge</a><br>
+      <br>
+      <a href="http://news.gmane.org/gmane.comp.file-systems.fuse.devel">Mailing
+list archives on&nbsp; GMane</a><br>
+      <br>
+      <a href="http://lists.sourceforge.net/lists/listinfo/fuse-devel">Subscribe
+mailing list</a><br>
+      <br>
+      <a href="http://sourceforge.net/projects/fuse">SourceForge
+project
+page</a><br>
+      <br>
+      <a href="http://fuse.sourceforge.net/wiki/index.php/LanguageBindings">Language bindings</a><br>
+      <br>
+      <a href="http://fuse.sourceforge.net/wiki/index.php/FileSystems">Filesystems based on FUSE</a><br>
+      <br>
+      <a href="http://fuse.sourceforge.net/wiki/index.php/OperatingSystems">Supported Operating Systems</a><br>
+      <br>
+      <a href="http://fuse.sourceforge.net/wiki/index.php/FAQ">FAQ</a><br>
+      <br>
+      <a href="http://fuse.sourceforge.net/wiki">Wiki</a><br>
+      </td>
+      <td style="vertical-align: top;">
+      <h1>Introduction<br>
+      </h1>
+      <p>With FUSE it is possible to implement a fully functional
+filesystem in a userspace program.&nbsp; Features include:<br>
+      </p>
+      <ul>
+        <li>Simple library API</li>
+        <li>Simple installation (no need to patch or recompile the
+kernel)<br>
+        </li>
+        <li>Secure implementation</li>
+        <li>Userspace - kernel interface is very efficient<br>
+        </li>
+        <li>Usable by non privileged users</li>
+        <li>Runs on Linux kernels 2.4.X and 2.6.X</li>
+        <li>Has proven very stable over time<br>
+        </li>
+      </ul>
+      <p>FUSE was originally developed to support <a href="http://avf.sourceforge.net/">AVFS</a>
+but it has since became a separate project.&nbsp; Now quite a few other
+      <a href="http://fuse.sourceforge.net/wiki/index.php/FileSystems">projects</a>
+are using it.&nbsp; Implementing a filesystem is simple,&nbsp; a <a href="http://fuse.sourceforge.net/helloworld.html">hello
+world</a> filesystem is less than a 100 lines long.&nbsp; Here's a
+sample session: </p>
+      <table style="text-align: left; width: 100%;" border="0" cellpadding="10" cellspacing="0">
+        <tbody>
+          <tr>
+            <td style="vertical-align: top; background-color: rgb(192, 192, 192);">
+            <pre>~/fuse/example$ mkdir /tmp/fuse<br>~/fuse/example$ ./hello /tmp/fuse<br>~/fuse/example$ ls -l /tmp/fuse<br>total 0<br>-r--r--r--  1 root root 13 Jan  1  1970 hello<br>~/fuse/example$ cat /tmp/fuse/hello<br>Hello World!<br>~/fuse/example$ fusermount -u /tmp/fuse<br>~/fuse/example$<br></pre>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <br>
+      <h1>Installation</h1>
+      <p>Some projects include the whole FUSE package (for simpler
+installation).&nbsp; In other cases or just to try out the examples
+FUSE must be installed first.&nbsp; The installation is simple, after
+unpacking enter:<br>
+      </p>
+      <table style="text-align: left; width: 100%;" border="0" cellpadding="10" cellspacing="0">
+        <tbody>
+          <tr>
+            <td style="vertical-align: top; background-color: rgb(192, 192, 192);">
+            <pre>&gt; ./configure<br>&gt;  make<br>&gt;  make install<br></pre>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p>If this produces an error, please read on.<br>
+      </p>
+      <p>The configure script will try to guess the location of the
+kernel source.&nbsp; In case this fails, it may be specified using the <span style="font-style: italic;">--with-kernel</span>&nbsp;
+parameter.&nbsp;&nbsp; Building the kernel module needs a configured
+kernel source tree matching the running kernel.&nbsp; If you build your
+own kernel this is no problem.&nbsp; On the other hand if a precompiled
+kernel is used, the kernel headers used by the FUSE build process must
+first be prepared.&nbsp; There are two possibilities:<br>
+      </p>
+      <ol>
+        <li>A package containing the kernel headers for the kernel
+binary is available in the distribution (e.g. on Debian it's the
+kernel-headers-X.Y.Z package for kernel-image-X.Y.Z)<br>
+        </li>
+        <li>The kernel source must be prepared:</li>
+      </ol>
+      <ul>
+        <ul>
+          <li>Extract the kernel source to some directory<br>
+          </li>
+          <li>Copy the running kernel's config (usually found in
+/boot/config-X.Y.Z) to <span style="font-style: italic;">.config</span>
+at the top of the source tree</li>
+          <li>Run <span style="font-style: italic;">make prepare</span></li>
+        </ul>
+      </ul>
+      <h1>Trying it out</h1>
+      <p>After installation, you can try out the filesystems in the <span style="font-style: italic;">example </span>directory.&nbsp; To see
+what is happening try adding the <span style="font-style: italic;">-d</span>
+option.&nbsp; This is the output produced by running <span style="font-style: italic;">cat /tmp/fuse/hello</span> in another
+shell:<br>
+      </p>
+      <table style="text-align: left; width: 100%;" border="0" cellpadding="10" cellspacing="0">
+        <tbody>
+          <tr>
+            <td style="vertical-align: top; background-color: rgb(192, 192, 192);">
+            <pre>~/fuse/example&gt; ./hello /tmp/fuse -d<br>unique: 2, opcode: LOOKUP (1), ino: 1, insize: 26<br>LOOKUP /hello<br>   INO: 2<br>   unique: 2, error: 0 (Success), outsize: 72<br>unique: 3, opcode: OPEN (14), ino: 2, insize: 24<br>   unique: 3, error: 0 (Success), outsize: 8<br>unique: 4, opcode: READ (15), ino: 2, insize: 32<br>READ 4096 bytes from 0<br>   READ 4096 bytes<br>   unique: 4, error: 0 (Success), outsize: 4104<br>unique: 0, opcode: RELEASE (18), ino: 2, insize: 24<br><br></pre>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p>More operations can be tried out with the <span style="font-style: italic;">fusexmp</span> example filesystem.&nbsp;
+This just mirrors the root directory similarly to <span style="font-style: italic;">mount --bind / /mountpoint</span>.&nbsp;
+This is not very useful in itself, but can be used as template for
+creating a new filesystem.<br>
+      </p>
+      <p>By default FUSE filesystems run multi-threaded.&nbsp; This can
+be verified by entering the mountpoint recursively in the <span style="font-style: italic;">fusexmp</span> filesystem.&nbsp;
+Multi-threaded operation can be disabled by adding the <span style="font-style: italic;">-s</span> option.<br>
+      </p>
+      <p>Some options can be passed to the FUSE kernel module and the library.&nbsp; See the output of <span style="font-style: italic;">fusexmp -h</span> for the list of these
+options.<br>
+      </p>
+      <h1>How does it work?</h1>
+      <p>The following figure shows the path of a filesystem call&nbsp;
+(e.g. stat) in the above <span style="font-style: italic;">hello world</span>
+example:<br>
+      </p>
+      <div style="text-align: center;"><img style="width: 526px; height: 392px;" alt="FUSE structure" src="FUSE:%20Filesystem%20in%20Userspace_files/fuse_structure.png"><br>
+      </div>
+      <p></p>
+      <p>The FUSE kernel module and the FUSE library communicate via a
+special file descriptor which is obtained by opening <span style="font-style: italic;">/dev/fuse</span>.&nbsp; This file
+can be opened multiple times, and the obtained file descriptor is
+passed to the mount syscall, to match up the descriptor with the
+mounted filesystem.<br>
+      </p>
+      <hr style="width: 100%; height: 2px;">
+      <div style="text-align: right;"> <span style="font-style: italic;">Hosted at: </span> <a href="http://sourceforge.net/"><img src="FUSE:%20Filesystem%20in%20Userspace_files/sflogo.png" alt="SourceForge.net Logo" border="0" height="37" width="125"></a></div>
+      </td>
+    </tr>
+  </tbody>
+</table>
+<br>
+
+</body></html>

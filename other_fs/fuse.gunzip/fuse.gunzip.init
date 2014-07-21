@@ -1,0 +1,104 @@
+#!/bin/bash
+
+### BEGIN INIT INFO
+# Provides: sshd
+# Required-Start: $fuse $local_fs
+# Required-Stop:  $fuse $local_fs kill
+# Default-Start: S
+# Default-Stop: 0 6
+# Short-Description: usr.fuse.gunzip enables transparent decompression for /usr
+# Description:       usr.fuse.gunzip enables transparent decompression for /usr
+### END INIT INFO
+
+. /lib/lsb/init-functions
+
+
+# export FUSE_GUNZIP_SIZE=100663296	# 16777216 < size  < 1073741824
+					# Default is 96 megabytes.
+					# When compiled on boxes with
+					# 250*1024K > MemTotal
+					# default is 32 megabytes.
+					# Does not have to be exported
+					# when default value is acceptible.
+
+# export FUSE_GUNZIP_FILES=4096		# 16       < files < 16384
+					# Hardcoded to 4096 at compile.
+
+GUN_FUSE=/media/fuse/gunzip		# Best left as /media/fuse/gunzip
+USR_BIND=/media/fuse/usr		# Best left as /media/fuse/usr
+
+#HOME_BIND=/media/fuse/home		# Uncomment if desired
+#OPT_BIND=/media/fuse/opt		# Uncomment if desired
+
+# Do not enable transparent decompression for directories
+# /bin /etc /lib /lib64 /sbin /var
+
+# Improper modification of options can create a security vulnerability
+# where any user can modify / as if root.
+
+OPTIONS="rw,allow_other,suid,noatime,default_permissions,auto_cache,hard_remove"
+
+start()  {
+  bind()  {
+    if [ -n "$1" ]; then
+      mount --rbind $2           $1 &&
+      mount --bind     $GUN_FUSE/$1 $2
+    fi
+  }
+
+  mdir() { if [ -n "$1" ] && ! [ -d $1 ]; then mkdir -p $1; fi; }
+
+  log_warning_msg "About to enable transparent decompression for /usr"
+
+  mdir "$GUN_FUSE"
+  mdir "$USR_BIND"
+  mdir "$OPT_BIND"
+  mdir "$HOME_BIND"
+
+  if    grep  -q            /dev/shm  /proc/mounts  ||
+        mount -t tmpfs none /dev/shm
+  then  :
+  else  log_failure_msg "Kernel lacks tmpfs support."
+        log_failure_msg "Transparent decompression for /usr failed."
+        false
+  fi &&
+  if    fuse.gunzip -o $OPTIONS $GUN_FUSE &&
+        bind "$USR_BIND"  "/usr" &&
+        bind "$OPT_BIND"  "/opt" &&
+        bind "$HOME_BIND" "/home"
+  then  log_success_msg  "Transparent decompression for /usr enabled."
+        if [ -d /usr/src/sorcery ]
+        then mount --rbind $USR_BIND/src/sorcery /usr/src/sorcery
+        fi
+# In some cases /usr/src/linux must permited shared writeable mmaps.
+# In that that event comment out the rbind for /usr/src/sorcery
+# and use the rbind below.
+#       mount --rbind $USR_BIND/src /usr/src
+  else  log_failure_msg  "Transparent decompression for /usr failed."
+  fi
+}
+
+stop()  {
+  # filesystems with open files do not unbind.
+  # Therefore, mount rbind the rbind to the original back to the original instead.
+
+  unbind()  { if [ -n "$1" ]; then  mount  --rbind $1 $2; sleep 1; fi; }
+
+  log_warning_msg  "About to stop transparent decompression for /usr"
+  sync
+  sleep 1
+  unbind "$USR_BIND"  /usr
+  unbind "$OPT_BIND"  /opt
+  unbind "$HOME_BIND" /home
+  umount "$GUN_FUSE"; sleep 1
+  pkill fuse.gunzip;  sleep 1
+  log_success_msg  "Transparent Decompression for /usr stopped."
+}
+
+help() { echo  "Usage: $0 {start|stop}"  1>&2; }
+
+case $1 in
+  start)  start  ;;
+   stop)  stop   ;;
+      *)  help   ;;
+esac

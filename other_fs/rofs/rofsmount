@@ -1,0 +1,31 @@
+#!/bin/bash
+
+if [ $# -lt 2 ]; then
+    echo "Usage: $0 readwrite-directory mount-point" 1>&2
+    exit 1
+fi
+
+# Check fuse module
+if [ -z "$(grep fuse /proc/modules > /dev/null 2>&1)" ]; then
+    if [ $UID = 0 ]; then
+        modprobe fuse > /dev/null 2>&1 || {
+            echo "Could not load fuse kernel module !" 1>&2
+            exit 1
+        }
+    else
+        echo "You need the fuse kernel module to run this. As you are"
+        echo "not root, I can't load it. Become root and run :"
+        echo
+        echo "    modprobe fuse"
+        exit 1
+    fi
+fi
+
+if [ $UID == 0 ]; then
+    # Allow other users and check permissions if run by root
+    FILESYSTEM_PARAMETERS="${FILESYSTEM_PARAMETERS} -o allow_other"
+fi
+
+# Run the daemon
+export ROFS_RW_PATH="$1"
+eval rofs "${FILESYSTEM_PARAMETERS}" "$2"

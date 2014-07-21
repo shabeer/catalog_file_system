@@ -1,0 +1,66 @@
+Tue Mar 20 22:00:00 UTC 2007	Kyle Sallee
+
+Sometimes fuse.gunzip process does not exit 
+merely by umounting the fuse.gunzip filesystem.
+This is unwanted behavior but normally does not create a problem.
+However, sometimes killall5 hangs during execution
+when fuse.gunzip process exists.
+Therefore, the stop function of the init script now
+executes pkill fuse.gunzip to terminate fuse.gunzip
+so that killall5 should no longer hang.
+Whether the sporadic hang behavior is due to a bug in
+killall5 from sysvinit or a bug in fuse is unknown.
+
+
+Wed Feb 14 21:50:00 UTC 2007	Kyle Sallee
+
+Added checks to not attempt to reduce file <= 4096 bytes
+and not try to transparently decompress files < 30 bytes.
+
+
+Sun Feb 11 06:30:00 UTC 2007	Kyle Sallee
+
+Moved execution of chown to before chmod in reduce.c
+so that SUID and SGID bits are not dropped from file modes.
+
+Automatically reduced cache size from 96M to 32M
+when compiling on boxes with less than 250M of RAM.
+
+Modified fuse.gunzip.init to not export FUSE_GUNZIP_SIZE
+since using the compile time value is probably best.
+
+
+Tue Jan 30 14:00:00 UTC 2007    Kyle Sallee
+
+Fixed typo in configure potentially preventing proper execution
+on x86_64 architecture.
+
+
+Thu Jan 11 03:00:00 UTC 2007    Kyle Sallee
+
+Increased cache size limit from 64M to 96M
+Running ldconfig may cycle the cache when
+many ELF libraries are reduced.
+
+
+Mon Jan  8 22:00:00 UTC 2007    Kyle Sallee
+
+Modified fuse.gunzip.c so that it sets
+the open file resource limit to 65536.
+Removed ulimit -n 65536 from startup script.
+
+
+Mon Jan  8 02:00:00 UTC 2007	Kyle Sallee
+
+Added ulimit -n 65536 to startup script so that
+the fuse.gunzip does not malfunction after it has
+opened more than 1024 files.
+Increased sleep delays stop function of init script
+to avoid potential hangs during shutdown
+
+
+Sun Dec 31 23:00:00 UTC 2006	Kyle Sallee
+
+Removed requirement on file's libmagic.
+Checking for 2 magic bytes at the front of a file
+is more quickly and easily done directly.

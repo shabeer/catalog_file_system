@@ -1,0 +1,129 @@
+fuse.gunzip
+http://fuse.gunzip.silverice.org
+
+If unclear where this source tarball originally came from.
+It was downloaded from the above website.
+
+
+
+Similar projects:
+
+
+FuseCompress
+http://www.miio.net/fusecompress/
+
+FuseCompress is an approach that uses lzo, gzip, and bzip2 compression
+to create a filesystem that provides both transparent compression
+and decompression of files.
+
+Boons:
+Emphasis on compression.
+Caching when compressed files are decompressed.
+Transparent compression of modified files.
+Future support planned for p7zip.
+
+Banes:
+Not performance oriented.
+
+
+
+e2compr
+http://e2compr.sourceforge.net/
+
+e2compr provides compression for the ext2 filesystem.
+
+Boons:
+It is a true filesystem.
+
+Banes:
+It is slow, inefficient, complex, abandonware.
+No support for ext3.
+No support for linux 2.6
+Kernel modification required for installation.
+
+
+
+zlibc
+http://zlibc.linux.lu/
+
+zlibc's hompeage describes it as:
+"This program has (almost) the same effect
+as a (read-only) compressed file system."
+
+Boons:
+Easy installation
+
+Banes:
+Can not decompress executables or libraries.
+Will not work with statically linked executables.
+No caching so every open of a compressed file
+  requires it to be completely decompressed.
+Compressed files must have a different name than original.
+
+
+http://upx.sourceforge.net/
+UPX
+
+Provides utilities and library for 
+creating and running compressed executables.
+
+Boons:
+Easy installation
+Support for multiple compression formats.
+Support for multiple ELF format.
+
+Banes:
+No caching.
+  Each run of an executable requires complete decompression of it.
+Only works on ELF executables.
+One extra ELF library link added per executable compressed.
+
+
+Summary.
+There are a number of projects for providing
+forms of transparent decompression for
+data files, executables, and libraries.
+Most of them are focused on easy installation
+and support for multiple compression formats.
+The only one designed for optimal performance
+for minimal complexity is fuse.gunzip
+
+SATA drives and the following technologies may
+put an end to further progress of complex
+implementations of compressed filesystems.
+However, as long the filesytem norm is to
+fragment files there may yet remain a niche
+for simple performance boosting overlay filesystems.
+
+
+Table 1
+
+			Feature Comparison Table
+
+Implementation	caching	exec	lib	data	usr	writing	formats
+FuseCompress	+	+	+	+		+	+
+fuse.gunzip	+	+	+	+	+
+e2compr		+	+	+	+	+	+
+zlibc					+	+
+upx			+			+		+
+
+caching =	elimination of multiple decompression
+		on repeatedly opened compressed files
+exec	=	support for compressed executables
+lib	=	support for compressed libraries
+data	=	support for compressed data files
+usr	=	can be used in for /usr filesystem
+writing	=	support both reading and writing
+		to transparently compressed files
+formats	=	provides more than one compression format
+
+
+Notes:
+
+1.  zlibc and upx have the easiest installations.
+However, even when used in combination
+they lack support for compressed ELF libraries.
+
+2.  fuse.gunzip and zlibc both use gzip formats without modification.
+Therefore, compressed files from both can easily be decompressed
+and restored to original when compression is not desired.

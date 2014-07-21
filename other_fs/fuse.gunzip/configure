@@ -1,0 +1,45 @@
+#!/bin/sh
+
+locate_lib()  {
+  echo -n "checking for lib$1... "
+
+  if            find              /lib{64,}/ $FP | grep -q "/lib$1.so"
+  then FOUND="-l$1"
+  else FOUND=$( find /usr/{,local/}lib{64,}/ $FP | grep    "/lib$1.a$" )
+  fi  2>/dev/null
+
+  if   [ -n "$FOUND" ]
+  then echo "yes"
+  else echo "no"; false
+  fi
+}
+
+if   [  -d      /lib64  ]  ||
+     [  -d  /usr/lib64  ]
+then LIBDIRS="-L/lib64 -L/lib -L/usr/lib64 -L/usr/lib"
+else LIBDIRS="-L/lib -L/usr/lib"
+fi
+
+FP="-maxdepth 1 -type f"
+
+locate_lib fuse     &&     LIBFUSE="$FOUND -lpthread -lrt" &&
+locate_lib ulockmgr && LIBULOCKMGR="$FOUND" &&
+locate_lib z        &&        LIBZ="$FOUND" &&
+
+LIBFUSE="`pkg-config fuse --cflags --libs | sed "s:-lfuse::"`$LIBFUSE" &&  
+
+RAM=$( grep "MemTotal:" /proc/meminfo | tr -s ' ' | cut -d ' ' -f2 )
+if   (( 256000 > RAM ))
+then sed -i "s:CACHE_SIZE=[^ ]*:CACHE_SIZE=33554432:" Makefile.in
+fi
+
+sed "s:%LIBDIRS%:$LIBDIRS:
+     s:%LIBFUSE%:$LIBFUSE:
+     s:%LIBULOCKMGR%:$LIBULOCKMGR:
+     s:%LIBZ%:$LIBZ:
+     s:%CFLAGS%:${CFLAGS:--Wall -O3}:
+     s:%LDFLAGS%:${LDFLAGS:--Wl,-s -Wl,-O1}:"  \
+    Makefile.in  >  Makefile  &&
+make clean
+
+
